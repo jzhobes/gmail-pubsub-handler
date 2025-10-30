@@ -103,43 +103,67 @@ async function handleTransaction({ from, subject }) {
 
     // ✅ Chase card payment
     if (sender.includes('chase.com') && subj.includes('your credit card payment is scheduled')) {
-        await handleChaseCardPayment(subject);
+        console.log(`🔍 Checking for Chase card payments for "${subject}"`);
+        // Search next month since Chase reminders are scheduled at start of next month
+        await processCalendarEvents('Pay Chase', { action: 'delete', monthOffset: 1 });
         return;
     }
 
     // ✅ Chase mortgage payment
     if (sender.includes('chase.com') && subj.includes('you scheduled your mortgage payment')) {
-        await handleChaseMortgagePayment(subject);
+        console.log(`🏠 Checking for Chase mortgage payments: "${subject}"`);
+        // Search next month since mortgage reminders are scheduled at start of next month
+        await processCalendarEvents('Pay mortgage', { action: 'delete', monthOffset: 1 });
         return;
     }
 
     // ✅ Comcast/Xfinity
     if (sender.includes('chase.com') && subj.includes('transaction with comcast / xfinity')) {
-        await handleXfinityPayment(subject);
+        console.log(`🌐 Checking for Comcast/Xfinity payments: "${subject}"`);
+        const amountMatch = subject.match(/\$([\d,]+(?:\.\d{2})?)/);
+        if (!amountMatch) {
+            console.log(`No dollar amount found in "${subject}"`);
+            return;
+        }
+        const amount = parseFloat(amountMatch[1].replace(/,/g, ''));
+        if (isNaN(amount) || amount < 100 || amount > 200) {
+            console.log(`Unexpected Comcast amount $${amount}, skipping.`);
+            return;
+        }
+        await processCalendarEvents('Comcast / Xfinity Withdrawal', { action: 'delete', monthOffset: 0 });
         return;
     }
 
     // ✅ Eversource
     if (sender.includes('chase.com') && subj.includes('transaction with spi*eversource')) {
-        await handleEversourcePayment(subject);
+        console.log(`🔌 Checking for Eversource/Speedpay payments: "${subject}"`);
+        const amountMatch = subject.match(/\$([\d,]+(?:\.\d{2})?)/);
+        if (!amountMatch) {
+            console.log(`No dollar amount found in "${subject}"`);
+            return;
+        }
+        const amount = parseFloat(amountMatch[1].replace(/,/g, ''));
+        if (isNaN(amount)) {
+            console.log(`Invalid Eversource amount in "${subject}"`);
+            return;
+        }
+        await processCalendarEvents('Pay Gas Bill', { action: 'patch', monthOffset: 0, title: `Gas Bill - $${amount}` });
         return;
     }
 
     console.log(`Ignoring email from "${from}" and subject "${subject}"`);
 }
 
-async function handleChaseCardPayment(subject) {
-    console.log(`🔍 Checking for Chase card payments for "${subject}"`);
-
+async function processCalendarEvents(eventPrefix, { action, monthOffset = 0, title }) {
     const now = new Date();
-    const monthStart = new Date(now.getFullYear(), now.getMonth(), 1);
-    const monthEnd = new Date(now.getFullYear(), now.getMonth() + 1, 0, 23, 59, 59);
+    const monthStart = new Date(now.getFullYear(), now.getMonth() + monthOffset, 1);
+    const monthEnd = new Date(now.getFullYear(), now.getMonth() + monthOffset + 1, 0, 23, 59, 59);
 
     const calendarList = await calendar.calendarList.list();
     const targetCal = calendarList.data.items.find(c => c.summary === CALENDAR_NAME);
     if (!targetCal) {
         console.log(`No calendar named "${CALENDAR_NAME}".`);
-        return;
+        return false;
     }
 
     const eventsRes = await calendar.events.list({
@@ -147,131 +171,27 @@ async function handleChaseCardPayment(subject) {
         timeMin: monthStart.toISOString(),
         timeMax: monthEnd.toISOString()
     });
-    const events = eventsRes.data.items.filter(e => e.summary.startsWith('Pay Chase'));
+    
+    const events = eventsRes.data.items.filter(e => e.summary.startsWith(eventPrefix));
     if (!events.length) {
-        console.log('No "Pay Chase" reminders this month.');
-        return;
+        console.log(`No "${eventPrefix}" reminders this month.`);
+        return false;
     }
 
     for (const e of events) {
-        console.log(`🗑 Deleting "${e.summary}" on ${e.start.date || e.start.dateTime}`);
-        await calendar.events.delete({ calendarId: targetCal.id, eventId: e.id });
+        if (action === 'delete') {
+            console.log(`🗑 Deleting "${e.summary}" on ${e.start.date || e.start.dateTime}`);
+            await calendar.events.delete({ calendarId: targetCal.id, eventId: e.id });
+        } else if (action === 'patch') {
+            console.log(`✏️ Updating "${e.summary}" → "${title}"`);
+            await calendar.events.patch({
+                calendarId: targetCal.id,
+                eventId: e.id,
+                requestBody: { summary: title }
+            });
+        } else {
+            console.log(`⁉️ Unknown action "${action}"`);
+        }
     }
-}
-
-async function handleChaseMortgagePayment(subject) {
-    console.log(`🏠 Checking for Chase mortgage payments: "${subject}"`);
-
-    const now = new Date();
-    const monthStart = new Date(now.getFullYear(), now.getMonth(), 1);
-    const monthEnd = new Date(now.getFullYear(), now.getMonth() + 1, 0, 23, 59, 59);
-
-    const calendarList = await calendar.calendarList.list();
-    const targetCal = calendarList.data.items.find(c => c.summary === CALENDAR_NAME);
-    if (!targetCal) {
-        console.log(`No calendar named "${CALENDAR_NAME}".`);
-        return;
-    }
-
-    const eventsRes = await calendar.events.list({
-        calendarId: targetCal.id,
-        timeMin: monthStart.toISOString(),
-        timeMax: monthEnd.toISOString()
-    });
-    const events = eventsRes.data.items.filter(e => e.summary.startsWith('Pay mortgage'));
-    if (!events.length) {
-        console.log('No "Pay mortgage" reminders this month.');
-        return;
-    }
-
-    for (const e of events) {
-        console.log(`🗑 Deleting "${e.summary}" on ${e.start.date || e.start.dateTime}`);
-        await calendar.events.delete({ calendarId: targetCal.id, eventId: e.id });
-    }
-}
-
-async function handleXfinityPayment(subject) {
-    console.log(`🌐 Checking for Comcast/Xfinity payments: "${subject}"`);
-    const amountMatch = subject.match(/\$([\d,]+(?:\.\d{2})?)/);
-    if (!amountMatch) {
-        console.log(`No dollar amount found in "${subject}"`);
-        return;
-    }
-
-    const amount = parseFloat(amountMatch[1].replace(/,/g, ''));
-    if (isNaN(amount) || amount < 100 || amount > 200) {
-        console.log(`Unexpected Comcast amount $${amount}, skipping.`);
-        return;
-    }
-
-    const now = new Date();
-    const monthStart = new Date(now.getFullYear(), now.getMonth(), 1);
-    const monthEnd = new Date(now.getFullYear(), now.getMonth() + 1, 0, 23, 59, 59);
-
-    const calendarList = await calendar.calendarList.list();
-    const targetCal = calendarList.data.items.find(c => c.summary === CALENDAR_NAME);
-    if (!targetCal) {
-        console.log(`No calendar named "${CALENDAR_NAME}".`);
-        return;
-    }
-
-    const eventsRes = await calendar.events.list({
-        calendarId: targetCal.id,
-        timeMin: monthStart.toISOString(),
-        timeMax: monthEnd.toISOString()
-    });
-    const events = eventsRes.data.items.filter(e => e.summary.startsWith('Comcast / Xfinity Withdrawal'));
-    if (!events.length) {
-        console.log('No Comcast/Xfinity reminders this month.');
-        return;
-    }
-
-    for (const e of events) {
-        console.log(`🗑 Deleting "${e.summary}" on ${e.start.date || e.start.dateTime}`);
-        await calendar.events.delete({ calendarId: targetCal.id, eventId: e.id });
-    }
-}
-
-async function handleEversourcePayment(subject) {
-    console.log(`🔌 Checking for Eversource/Speedpay payments: "${subject}"`);
-    const amountMatch = subject.match(/\$([\d,]+(?:\.\d{2})?)/);
-    if (!amountMatch) {
-        console.log(`No dollar amount found in "${subject}"`);
-        return;
-    }
-
-    const amount = parseFloat(amountMatch[1].replace(/,/g, ''));
-    if (isNaN(amount)) {
-        console.log(`Invalid Eversource amount in "${subject}"`);
-        return;
-    }
-
-    const now = new Date();
-    const monthStart = new Date(now.getFullYear(), now.getMonth(), 1);
-    const monthEnd = new Date(now.getFullYear(), now.getMonth() + 1, 0, 23, 59, 59);
-
-    const calendarList = await calendar.calendarList.list();
-    const targetCal = calendarList.data.items.find(c => c.summary === CALENDAR_NAME);
-    if (!targetCal) return console.log(`No calendar named "${CALENDAR_NAME}".`);
-
-    const eventsRes = await calendar.events.list({
-        calendarId: targetCal.id,
-        timeMin: monthStart.toISOString(),
-        timeMax: monthEnd.toISOString()
-    });
-    const events = eventsRes.data.items.filter(e => e.summary.startsWith('Pay Gas Bill'));
-    if (!events.length) {
-        console.log('No "Pay Gas Bill" reminders this month.');
-        return;
-    }
-
-    for (const e of events) {
-        const newTitle = `Gas Bill - $${amount}`;
-        console.log(`✏️ Updating "${e.summary}" → "${newTitle}"`);
-        await calendar.events.patch({
-            calendarId: targetCal.id,
-            eventId: e.id,
-            requestBody: { summary: newTitle }
-        });
-    }
+    return true;
 }
