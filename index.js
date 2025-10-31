@@ -41,6 +41,12 @@ cloudEvent('gmailPubSubHandler', async cloudEvent => {
         const docSnap = await docRef.get();
         const lastHistoryId = docSnap.exists ? docSnap.data().lastHistoryId : null;
 
+        // Skip if this historyId is not newer than what we've already processed
+        if (lastHistoryId && newHistoryId <= lastHistoryId) {
+            console.log(`⏭️ Skipping ${newHistoryId < lastHistoryId ? 'old' : 'duplicate'} historyId: ${newHistoryId} (last: ${lastHistoryId})`);
+            return;
+        }
+
         // Decide which historyId to start from
         const startId = lastHistoryId || newHistoryId;
         console.log(`🔍 Fetching Gmail history since ${startId}`);
@@ -51,7 +57,13 @@ cloudEvent('gmailPubSubHandler', async cloudEvent => {
                 userId: 'me',
                 startHistoryId: startId,
             });
-            console.log(`📬 Gmail History fetched: ${res.data.history?.length || 0} items`);
+
+            if (!res.data.history) {
+                console.log('📬 Gmail History: No changes since last check');
+                return;
+            }
+
+            console.log(`📬 Gmail History fetched: ${res.data.history.length} items`);
 
             for (const { messagesAdded = [] } of res.data.history) {
                 for (const { message } of messagesAdded) {
@@ -62,10 +74,13 @@ cloudEvent('gmailPubSubHandler', async cloudEvent => {
                         const subject = subjectHeader?.value || '';
                         const from = fromHeader?.value || '';
 
-                        await handleTransaction({ from, subject });
+                        const wasProcessed = await handleTransaction({ from, subject, message: msg });
+                        if (wasProcessed) {
+                            await markMessageAsRead({ from, subject, messageId: message.id });
+                        }
                     } catch (err) {
                         if (err.code === 404) {
-                            console.warn(`Skipping missing message: ${message.id}`);
+                            console.warn(`👻 Skipping missing message: ${message.id}`);
                             continue;
                         }
                         // Rethrow unexpected errors
@@ -97,16 +112,45 @@ cloudEvent('gmailPubSubHandler', async cloudEvent => {
     }
 });
 
-async function handleTransaction({ from, subject }) {
+async function handleTransaction({ from, subject, message }) {
     const sender = from.toLowerCase();
     const subj = subject.toLowerCase();
+
+    // ✅ Capital One withdrawal notice
+    if (sender.includes('capitalone.com') && subj.includes('withdrawal notice')) {
+        console.log(`🏦 Checking Capital One withdrawal notice for "${subject}"`);
+        const body = extractEmailBody(message).toLowerCase();
+
+        if (body.includes('att has initiated')) {
+            await processCalendarEvents('Pay AT&T', { action: 'delete', monthOffset: 1 });
+            return true;
+        } else if (body.includes('lowes has initiated')) {
+            await processCalendarEvents('Pay Lowes', { action: 'delete', monthOffset: 0 });
+            return true;
+        } else if (body.includes('eastern bank has initiated')) {
+            await processCalendarEvents('Pay Eastern Savings', { action: 'delete', monthOffset: 0 });
+            return true;
+        } else if (body.includes('sunrun has initiated')) {
+            await processCalendarEvents('Sunrun withdrawal', { action: 'delete', monthOffset: 0 });
+            return true;
+        }
+        return false;
+    }
+
+    // ✅ Amex card payment
+    if (sender.includes('americanexpress.com') && subj.includes('received your payment')) {
+        console.log(`💳 Checking for Amex card payments for "${subject}"`);
+        // Search next month since Amex reminders are scheduled at start of next month
+        await processCalendarEvents('Pay Amex', { action: 'delete', monthOffset: 1 });
+        return true;
+    }
 
     // ✅ Chase card payment
     if (sender.includes('chase.com') && subj.includes('your credit card payment is scheduled')) {
         console.log(`🔍 Checking for Chase card payments for "${subject}"`);
         // Search next month since Chase reminders are scheduled at start of next month
         await processCalendarEvents('Pay Chase', { action: 'delete', monthOffset: 1 });
-        return;
+        return true;
     }
 
     // ✅ Chase mortgage payment
@@ -114,7 +158,7 @@ async function handleTransaction({ from, subject }) {
         console.log(`🏠 Checking for Chase mortgage payments: "${subject}"`);
         // Search next month since mortgage reminders are scheduled at start of next month
         await processCalendarEvents('Pay mortgage', { action: 'delete', monthOffset: 1 });
-        return;
+        return true;
     }
 
     // ✅ Comcast/Xfinity
@@ -123,15 +167,15 @@ async function handleTransaction({ from, subject }) {
         const amountMatch = subject.match(/\$([\d,]+(?:\.\d{2})?)/);
         if (!amountMatch) {
             console.log(`No dollar amount found in "${subject}"`);
-            return;
+            return false;
         }
         const amount = parseFloat(amountMatch[1].replace(/,/g, ''));
         if (isNaN(amount) || amount < 100 || amount > 200) {
             console.log(`Unexpected Comcast amount $${amount}, skipping.`);
-            return;
+            return false;
         }
         await processCalendarEvents('Comcast / Xfinity Withdrawal', { action: 'delete', monthOffset: 0 });
-        return;
+        return true;
     }
 
     // ✅ Eversource
@@ -140,18 +184,50 @@ async function handleTransaction({ from, subject }) {
         const amountMatch = subject.match(/\$([\d,]+(?:\.\d{2})?)/);
         if (!amountMatch) {
             console.log(`No dollar amount found in "${subject}"`);
-            return;
+            return false;
         }
         const amount = parseFloat(amountMatch[1].replace(/,/g, ''));
         if (isNaN(amount)) {
             console.log(`Invalid Eversource amount in "${subject}"`);
-            return;
+            return false;
         }
         await processCalendarEvents('Pay Gas Bill', { action: 'patch', monthOffset: 0, title: `Gas Bill - $${amount}` });
-        return;
+        return true;
     }
 
-    console.log(`Ignoring email from "${from}" and subject "${subject}"`);
+    console.log(`📖 Ignoring email from "${from}" and subject "${subject}"`);
+    return false;
+}
+
+function extractEmailBody(message) {
+    const { payload } = message.data;
+
+    // Try to get plain text body first
+    if (payload.body?.data) {
+        return Buffer.from(payload.body.data, 'base64').toString('utf8');
+    }
+
+    // Check for multipart content
+    if (payload.parts) {
+        for (const part of payload.parts) {
+            if (part.mimeType === 'text/plain' && part.body?.data) {
+                return Buffer.from(part.body.data, 'base64').toString('utf8');
+            }
+        }
+    }
+
+    return '';
+}
+
+async function markMessageAsRead({ from, subject, messageId }) {
+    await gmail.users.messages.modify({
+        userId: 'me',
+        id: messageId,
+        requestBody: {
+            removeLabelIds: ['UNREAD']
+        }
+    });
+    console.log(`📖 Marked email "${from}" and subject "${subject}" as read.`);
 }
 
 async function processCalendarEvents(eventPrefix, { action, monthOffset = 0, title }) {
@@ -171,7 +247,7 @@ async function processCalendarEvents(eventPrefix, { action, monthOffset = 0, tit
         timeMin: monthStart.toISOString(),
         timeMax: monthEnd.toISOString()
     });
-    
+
     const events = eventsRes.data.items.filter(e => e.summary.startsWith(eventPrefix));
     if (!events.length) {
         console.log(`No "${eventPrefix}" reminders this month.`);
