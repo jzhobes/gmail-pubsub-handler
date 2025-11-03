@@ -49,6 +49,22 @@ cloudEvent('gmailPubSubHandler', async cloudEvent => {
 
         // Decide which historyId to start from
         const startId = lastHistoryId || newHistoryId;
+
+        // Create a processing lock to prevent duplicate execution
+        const lockKey = `${email}_${startId}_${newHistoryId}`;
+        const lockRef = firestore.collection('processing_locks').doc(lockKey);
+
+        try {
+            await lockRef.create({ timestamp: Date.now(), ttl: Date.now() + 5000 }); // 5 second TTL
+        } catch (err) {
+            // ALREADY_EXISTS
+            if (err.code === 6) {
+                console.log(`🔒 Another instance is processing historyId range ${startId}-${newHistoryId}`);
+                return;
+            }
+            throw err;
+        }
+
         console.log(`🔍 Fetching Gmail history since ${startId}`);
 
         try {
@@ -89,8 +105,11 @@ cloudEvent('gmailPubSubHandler', async cloudEvent => {
                 }
             }
 
-            // Persist the latest historyId
-            await docRef.set({ lastHistoryId: newHistoryId }, { merge: true });
+            // Persist the latest historyId and cleanup lock
+            await Promise.all([
+                docRef.set({ lastHistoryId: newHistoryId }, { merge: true }),
+                lockRef.delete()
+            ]);
             console.log(`✅ Updated Firestore lastHistoryId → ${newHistoryId}`);
         } catch (apiErr) {
             if (apiErr?.response?.status === 400) {
