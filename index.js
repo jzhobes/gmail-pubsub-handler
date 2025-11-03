@@ -141,7 +141,7 @@ async function handleTransaction({ from, subject, message }) {
         const body = extractEmailBody(message).toLowerCase();
 
         if (body.includes('att has initiated')) {
-            await processCalendarEvents('Pay AT&T', { action: 'delete', monthOffset: 1 });
+            await processCalendarEvents('Pay AT&T', { action: 'delete', monthOffset: 0 });
             return true;
         } else if (body.includes('lowes has initiated')) {
             await processCalendarEvents('Pay Lowes', { action: 'delete', monthOffset: 0 });
