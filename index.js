@@ -68,41 +68,10 @@ cloudEvent('gmailPubSubHandler', async cloudEvent => {
         console.log(`🔍 Fetching Gmail history since ${startId}`);
 
         try {
-            // Fetch recent Gmail changes
-            const res = await gmail.users.history.list({
-                userId: 'me',
-                startHistoryId: startId,
-            });
-
-            if (!res.data.history) {
+            const success = await processGmailHistory(startId);
+            if (!success) {
                 console.log('📬 Gmail History: No changes since last check');
                 return;
-            }
-
-            console.log(`📬 Gmail History fetched: ${res.data.history.length} items`);
-
-            for (const { messagesAdded = [] } of res.data.history) {
-                for (const { message } of messagesAdded) {
-                    try {
-                        const msg = await gmail.users.messages.get({ userId: 'me', id: message.id });
-                        const subjectHeader = msg.data.payload.headers.find(h => h.name === 'Subject');
-                        const fromHeader = msg.data.payload.headers.find(h => h.name === 'From');
-                        const subject = subjectHeader?.value || '';
-                        const from = fromHeader?.value || '';
-
-                        const wasProcessed = await handleTransaction({ from, subject, message: msg });
-                        if (wasProcessed) {
-                            await markMessageAsRead({ from, subject, messageId: message.id });
-                        }
-                    } catch (err) {
-                        if (err.code === 404) {
-                            console.warn(`👻 Skipping missing message: ${message.id}`);
-                            continue;
-                        }
-                        // Rethrow unexpected errors
-                        throw err;
-                    }
-                }
             }
 
             // Persist the latest historyId and cleanup lock
@@ -130,6 +99,49 @@ cloudEvent('gmailPubSubHandler', async cloudEvent => {
         console.error(`❌ Error processing Gmail Pub/Sub message: ${err.message}`);
     }
 });
+
+export async function processGmailHistory(startHistoryId) {
+    // Fetch recent Gmail changes
+    const res = await gmail.users.history.list({
+        userId: 'me',
+        startHistoryId,
+    });
+
+    if (!res.data.history) {
+        return false;
+    }
+
+    console.log(`📬 Gmail History fetched: ${res.data.history.length} items`);
+
+    for (const { messagesAdded = [] } of res.data.history) {
+        for (const { message } of messagesAdded) {
+            try {
+                const msg = await gmail.users.messages.get({ userId: 'me', id: message.id });
+                const subject = msg.data.payload.headers.find(h => h.name === 'Subject')?.value || '';
+                const from = msg.data.payload.headers.find(h => h.name === 'From')?.value || '';
+
+                // Debug purposes.
+                // const timestamp = msg.data.payload.headers.find(h => h.name === 'Date')?.value || '';
+                // const estTime = timestamp ? new Date(timestamp).toLocaleString('en-US', { timeZone: 'America/New_York' }) : '';
+                // console.log(`📧 Date="${estTime}" Message: From="${from}" Subject="${subject}"`);
+
+                const wasProcessed = await handleTransaction({ from, subject, message: msg });
+                if (wasProcessed) {
+                    await markMessageAsRead({ from, subject, messageId: message.id });
+                }
+            } catch (err) {
+                if (err.code === 404) {
+                    console.warn(`👻 Skipping missing message: ${message.id}`);
+                    continue;
+                }
+                // Rethrow unexpected errors
+                throw err;
+            }
+        }
+    }
+
+    return true;
+}
 
 async function handleTransaction({ from, subject, message }) {
     const sender = from.toLowerCase();
