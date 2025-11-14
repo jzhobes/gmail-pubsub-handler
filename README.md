@@ -9,18 +9,15 @@ When Gmail sends a push notification to the configured Pub/Sub topic, this Cloud
 2. Fetches the Gmail history since the last recorded `historyId`.
 3. Retrieves message metadata (e.g., sender, subject) for new messages.
 4. Stores state in Firestore to track the most recent Gmail history ID.
-5. Routes messages to specialized handlers that tidy up Google Calendar reminders for common bill-payment emails (Chase credit card & mortgage, Comcast/Xfinity, Eversource/Speedpay).
+5. Routes messages to specialized handlers that tidy up Google Calendar reminders for common bill-payment emails.
 
-## Architecture
+## Data Flow
 
 ```
-Gmail → Pub/Sub Topic → Cloud Run (gmail-pubsub-handler) → Firestore
+Gmail → Pub/Sub Topic → Cloud Run → Google Calendar
+                            ↓
+                        Firestore
 ```
-
-- **Pub/Sub Topic:** `projects/project-alfred-bot/topics/gmail`
-- **Cloud Run Service:** `gmail-pubsub-handler`
-- **Firestore Collection:** `gmail_sync_state`
-- **Secret Manager Secret:** `alfred-oauth-credentials`
 
 ## Runtime Environment Variables
 
@@ -30,7 +27,37 @@ Gmail → Pub/Sub Topic → Cloud Run (gmail-pubsub-handler) → Firestore
 | `FIRESTORE_COLLECTION` | ✅ | Name of the Firestore collection used to persist the latest Gmail history IDs per mailbox. |
 | `CALENDAR_NAME` | ✅ | Google Calendar display name that will be queried and updated by the payment handlers. |
 
-## Permissions Required
+## OAuth Setup
+
+Generate OAuth credentials using `refreshToken.js`:
+1. Create Google OAuth client credentials in Google Cloud Console
+2. Update `refreshToken.js` with your `client_id` and `client_secret`
+3. Run `node refreshToken.js` and follow the authorization flow
+4. Store the resulting JSON in Secret Manager
+
+## Supported Payment Handlers
+
+The system automatically processes these payment confirmation emails:
+
+| Provider | Email Pattern | Calendar Action |
+|----------|---------------|----------------|
+| **American Express** | `americanexpress.com` + "received your payment" | Delete "Pay Amex" reminders |
+| **Chase Credit Card** | `chase.com` + "credit card payment is scheduled" | Delete "Pay Chase" reminders |
+| **Chase Mortgage** | `chase.com` + "you scheduled your mortgage payment" | Delete "Pay mortgage" reminders |
+| **Comcast/Xfinity** | `chase.com` + "transaction with comcast / xfinity" | Delete "Comcast / Xfinity Withdrawal" reminders |
+| **Eversource** | `chase.com` + "transaction with spi*eversource" | Update "Pay Gas Bill" with amount |
+| **Capital One Withdrawals** | `capitalone.com` + "withdrawal notice" | Delete various bill reminders (AT&T, Lowes, Eastern Savings, Sunrun) |
+
+Processed emails are automatically marked as read.
+
+## Deployment
+
+### Required OAuth Scopes
+- `https://www.googleapis.com/auth/gmail.readonly` - Read Gmail messages and history
+- `https://www.googleapis.com/auth/gmail.modify` - Mark messages as read
+- `https://www.googleapis.com/auth/calendar` - Read/modify calendar events
+
+### Service Account Permissions
 
 | Service Account | Role |
 |------------------|------|
@@ -54,6 +81,9 @@ Occurs when Gmail’s history ID has expired or been invalidated. You must reset
 
 ### ⚠️ `No message data found.`
 Indicates the Pub/Sub message payload was empty or malformed.
+
+### ❌ `Request had insufficient authentication scopes`
+Occurs when OAuth credentials lack required scopes. Regenerate refresh token with all required scopes using `refreshToken.js`.
 
 ## Local Development
 

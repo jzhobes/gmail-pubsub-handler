@@ -254,39 +254,47 @@ async function processCalendarEvents(eventPrefix, { action, monthOffset = 0, tit
     const monthStart = new Date(now.getFullYear(), now.getMonth() + monthOffset, 1);
     const monthEnd = new Date(now.getFullYear(), now.getMonth() + monthOffset + 1, 0, 23, 59, 59);
 
-    const calendarList = await calendar.calendarList.list();
-    const targetCal = calendarList.data.items.find(c => c.summary === CALENDAR_NAME);
-    if (!targetCal) {
-        console.log(`No calendar named "${CALENDAR_NAME}".`);
-        return false;
-    }
-
-    const eventsRes = await calendar.events.list({
-        calendarId: targetCal.id,
-        timeMin: monthStart.toISOString(),
-        timeMax: monthEnd.toISOString()
-    });
-
-    const events = eventsRes.data.items.filter(e => e.summary.startsWith(eventPrefix));
-    if (!events.length) {
-        console.log(`No "${eventPrefix}" reminders this month.`);
-        return false;
-    }
-
-    for (const e of events) {
-        if (action === 'delete') {
-            console.log(`🗑 Deleting "${e.summary}" on ${e.start.date || e.start.dateTime}`);
-            await calendar.events.delete({ calendarId: targetCal.id, eventId: e.id });
-        } else if (action === 'patch') {
-            console.log(`✏️ Updating "${e.summary}" → "${title}"`);
-            await calendar.events.patch({
-                calendarId: targetCal.id,
-                eventId: e.id,
-                requestBody: { summary: title }
-            });
-        } else {
-            console.log(`⁉️ Unknown action "${action}"`);
+    try {
+        const calendarList = await calendar.calendarList.list();
+        const targetCal = calendarList.data.items.find(c => c.summary === CALENDAR_NAME);
+        if (!targetCal) {
+            console.log(`No calendar named "${CALENDAR_NAME}".`);
+            return false;
         }
+
+        const eventsRes = await calendar.events.list({
+            calendarId: targetCal.id,
+            timeMin: monthStart.toISOString(),
+            timeMax: monthEnd.toISOString()
+        });
+
+        const events = eventsRes.data.items.filter(e => e.summary.startsWith(eventPrefix));
+        if (!events.length) {
+            console.log(`No "${eventPrefix}" reminders this month.`);
+            return false;
+        }
+
+        for (const e of events) {
+            if (action === 'delete') {
+                // For recurring events, use originalStartTime if available, otherwise use start
+                const actualStart = e.originalStartTime || e.start;
+                const eventDate = actualStart.date || new Date(actualStart.dateTime).toISOString().split('T')[0];
+                console.log(`🗑 Deleting "${e.summary}" on ${eventDate}`);
+                await calendar.events.delete({ calendarId: targetCal.id, eventId: e.id });
+            } else if (action === 'patch') {
+                console.log(`✏️ Updating "${e.summary}" → "${title}"`);
+                await calendar.events.patch({
+                    calendarId: targetCal.id,
+                    eventId: e.id,
+                    requestBody: { summary: title }
+                });
+            } else {
+                console.log(`⁉️ Unknown action "${action}"`);
+            }
+        }
+        return true;
+    } catch (calErr) {
+        console.error(`❌ Calendar API error: ${calErr.message}`);
+        return false;
     }
-    return true;
 }
