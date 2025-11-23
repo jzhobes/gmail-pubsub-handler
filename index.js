@@ -134,8 +134,9 @@ export async function processGmailHistory(startHistoryId) {
                     console.warn(`👻 Skipping missing message: ${message.id}`);
                     continue;
                 }
-                // Rethrow unexpected errors
-                throw err;
+                // Log error but continue processing other messages (Poison Pill protection)
+                console.error(`❌ Error processing message ${message.id}: ${err.message}`);
+                continue;
             }
         }
     }
@@ -233,17 +234,31 @@ async function handleTransaction({ from, subject, message }) {
 function extractEmailBody(message) {
     const { payload } = message.data;
 
-    // Try to get plain text body first
-    if (payload.body?.data) {
-        return Buffer.from(payload.body.data, 'base64').toString('utf8');
+    // Helper to decode base64
+    const decode = (data) => Buffer.from(data, 'base64').toString('utf8');
+
+    // 1. Try plain text in main payload
+    if (payload.mimeType === 'text/plain' && payload.body?.data) {
+        return decode(payload.body.data);
     }
 
-    // Check for multipart content
+    // 2. Try HTML in main payload
+    if (payload.mimeType === 'text/html' && payload.body?.data) {
+        return decode(payload.body.data);
+    }
+
+    // 3. Search in parts
     if (payload.parts) {
-        for (const part of payload.parts) {
-            if (part.mimeType === 'text/plain' && part.body?.data) {
-                return Buffer.from(part.body.data, 'base64').toString('utf8');
-            }
+        // Prefer plain text
+        const plainPart = payload.parts.find(p => p.mimeType === 'text/plain' && p.body?.data);
+        if (plainPart) {
+            return decode(plainPart.body.data);
+        }
+
+        // Fallback to HTML
+        const htmlPart = payload.parts.find(p => p.mimeType === 'text/html' && p.body?.data);
+        if (htmlPart) {
+            return decode(htmlPart.body.data);
         }
     }
 
@@ -277,7 +292,8 @@ async function processCalendarEvents(eventPrefix, { action, monthOffset = 0, tit
         const eventsRes = await calendar.events.list({
             calendarId: targetCal.id,
             timeMin: monthStart.toISOString(),
-            timeMax: monthEnd.toISOString()
+            timeMax: monthEnd.toISOString(),
+            singleEvents: true, // Expand recurring events into individual instances
         });
 
         const events = eventsRes.data.items.filter(e => e.summary.startsWith(eventPrefix));
