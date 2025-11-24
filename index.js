@@ -2,6 +2,7 @@ import 'dotenv/config';
 import { cloudEvent } from '@google-cloud/functions-framework';
 import { Firestore } from '@google-cloud/firestore';
 import { google } from 'googleapis';
+import { checkAndMarkMessageProcessed } from './deduplication.js';
 
 const { GMAIL_OAUTH_CREDENTIALS, FIRESTORE_COLLECTION, CALENDAR_NAME } = process.env;
 if (!GMAIL_OAUTH_CREDENTIALS || !FIRESTORE_COLLECTION || !CALENDAR_NAME) {
@@ -50,21 +51,6 @@ cloudEvent('gmailPubSubHandler', async cloudEvent => {
         // Decide which historyId to start from
         const startId = lastHistoryId || newHistoryId;
 
-        // Create a processing lock to prevent duplicate execution
-        const lockKey = `${email}_${startId}_${newHistoryId}`;
-        const lockRef = firestore.collection('processing_locks').doc(lockKey);
-
-        try {
-            await lockRef.create({ timestamp: Date.now(), ttl: Date.now() + 5000 }); // 5 second TTL
-        } catch (err) {
-            // ALREADY_EXISTS
-            if (err.code === 6) {
-                console.log(`🔒 Another instance is processing historyId range ${startId}-${newHistoryId}`);
-                return;
-            }
-            throw err;
-        }
-
         console.log(`🔍 Fetching Gmail history since ${startId}`);
 
         try {
@@ -74,11 +60,8 @@ cloudEvent('gmailPubSubHandler', async cloudEvent => {
                 return;
             }
 
-            // Persist the latest historyId and cleanup lock
-            await Promise.all([
-                docRef.set({ lastHistoryId: newHistoryId }, { merge: true }),
-                lockRef.delete()
-            ]);
+            // Persist the latest historyId
+            await docRef.set({ lastHistoryId: newHistoryId }, { merge: true });
             console.log(`✅ Updated Firestore lastHistoryId → ${newHistoryId}`);
         } catch (apiErr) {
             if (apiErr?.response?.status === 400) {
@@ -100,6 +83,13 @@ cloudEvent('gmailPubSubHandler', async cloudEvent => {
     }
 });
 
+/**
+ * Fetches and processes Gmail history starting from a specific history ID.
+ * Iterates through added messages, deduplicates them, and handles transactions.
+ *
+ * @param {string} startHistoryId - The history ID to start fetching changes from.
+ * @returns {Promise<boolean>} - Returns `true` if history was successfully processed, `false` if no history was found.
+ */
 export async function processGmailHistory(startHistoryId) {
     // Fetch recent Gmail changes
     const res = await gmail.users.history.list({
@@ -116,6 +106,13 @@ export async function processGmailHistory(startHistoryId) {
     for (const { messagesAdded = [] } of res.data.history) {
         for (const { message } of messagesAdded) {
             try {
+                // Deduplicate based on message ID
+                const isNew = await checkAndMarkMessageProcessed(firestore, message.id);
+                if (!isNew) {
+                    console.log(`⏭️ Skipping duplicate message: ${message.id}`);
+                    continue;
+                }
+
                 const msg = await gmail.users.messages.get({ userId: 'me', id: message.id });
                 const subject = msg.data.payload.headers.find(h => h.name === 'Subject')?.value || '';
                 const from = msg.data.payload.headers.find(h => h.name === 'From')?.value || '';
@@ -144,6 +141,16 @@ export async function processGmailHistory(startHistoryId) {
     return true;
 }
 
+/**
+ * Analyzes an email to detect and handle specific financial transactions.
+ * If a match is found, it triggers calendar event updates.
+ *
+ * @param {Object} params - The parameters.
+ * @param {string} params.from - The sender's email address.
+ * @param {string} params.subject - The email subject.
+ * @param {Object} params.message - The full Gmail message object.
+ * @returns {Promise<boolean>} - Returns `true` if a transaction was matched and processed, `false` otherwise.
+ */
 async function handleTransaction({ from, subject, message }) {
     const sender = from.toLowerCase();
     const subj = subject.toLowerCase();
@@ -231,6 +238,13 @@ async function handleTransaction({ from, subject, message }) {
     return false;
 }
 
+/**
+ * Extracts the plain text or HTML body from a Gmail message payload.
+ * Handles multipart messages and prefers plain text.
+ *
+ * @param {Object} message - The Gmail message object.
+ * @returns {string} - The extracted email body content.
+ */
 function extractEmailBody(message) {
     const { payload } = message.data;
 
@@ -265,6 +279,15 @@ function extractEmailBody(message) {
     return '';
 }
 
+/**
+ * Marks a specific Gmail message as read by removing the 'UNREAD' label.
+ *
+ * @param {Object} params - The parameters.
+ * @param {string} params.from - The sender's email address (for logging).
+ * @param {string} params.subject - The email subject (for logging).
+ * @param {string} params.messageId - The ID of the message to mark as read.
+ * @returns {Promise<void>}
+ */
 async function markMessageAsRead({ from, subject, messageId }) {
     await gmail.users.messages.modify({
         userId: 'me',
@@ -276,6 +299,17 @@ async function markMessageAsRead({ from, subject, messageId }) {
     console.log(`📖 Marked email "${from}" and subject "${subject}" as read.`);
 }
 
+/**
+ * Updates or deletes Google Calendar events based on transaction details.
+ * Searches for events matching a prefix within a specific month range.
+ *
+ * @param {string} eventPrefix - The prefix to search for in event summaries (e.g., "Pay Amex").
+ * @param {Object} options - The options for processing.
+ * @param {string} options.action - The action to perform: 'delete' or 'patch'.
+ * @param {number} [options.monthOffset=0] - The offset in months from the current date to search (0 = current month, 1 = next month).
+ * @param {string} [options.title] - The new title for the event (required if action is 'patch').
+ * @returns {Promise<boolean>} - Returns `true` if successful, `false` if an error occurred or no calendar was found.
+ */
 async function processCalendarEvents(eventPrefix, { action, monthOffset = 0, title }) {
     const now = new Date();
     const monthStart = new Date(now.getFullYear(), now.getMonth() + monthOffset, 1);
