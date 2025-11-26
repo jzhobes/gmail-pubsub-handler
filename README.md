@@ -1,6 +1,6 @@
 # Alfred Bot Gmail Pub/Sub Handler
 
-This project deploys a Google Cloud Run service that reacts to Gmail push notifications delivered by **Pub/Sub**, loads recent Gmail message history, and orchestrates follow-up actions in Google Calendar.
+This project deploys a Google Cloud Run service that reacts to Gmail push notifications delivered by **Pub/Sub**, loads recent Gmail message history, and orchestrates follow-up actions in Google Calendar and Google Drive.
 
 ## Overview
 
@@ -9,23 +9,28 @@ When Gmail sends a push notification to the configured Pub/Sub topic, this Cloud
 2. Fetches the Gmail history since the last recorded `historyId`.
 3. Retrieves message metadata (e.g., sender, subject) for new messages.
 4. Stores state in Firestore to track the most recent Gmail history ID.
-5. Routes messages to specialized handlers that tidy up Google Calendar reminders for common bill-payment emails.
+5. Routes messages to specialized handlers:
+    - **Calendar**: Tidies up reminders for common bill-payment emails.
+    - **Drive**: Downloads and archives PDF bills (e.g., National Grid).
 
 ## Data Flow
 
 ```
 Gmail → Pub/Sub Topic → Cloud Run → Google Calendar
+                            ↓      ↘
+                        Firestore   Google Drive
                             ↓
-                        Firestore
+                    National Grid Website
 ```
 
 ## Runtime Environment Variables
 
 | Variable | Required | Description |
 |-----------|----------|--------------|
-| `GMAIL_OAUTH_CREDENTIALS` | ✅ | JSON string containing `client_id`, `client_secret`, and `refresh_token` used for Gmail/Calendar access. |
+| `GMAIL_OAUTH_CREDENTIALS` | ✅ | JSON string containing `client_id`, `client_secret`, and `refresh_token` used for Gmail/Calendar/Drive access. |
 | `FIRESTORE_COLLECTION` | ✅ | Name of the Firestore collection used to persist the latest Gmail history IDs per mailbox. |
 | `CALENDAR_NAME` | ✅ | Google Calendar display name that will be queried and updated by the payment handlers. |
+| `NATIONAL_GRID_CREDENTIALS` | ❌ | (Optional) JSON string or `user:pass` for National Grid account access. Required for bill downloading. |
 
 ## OAuth Setup
 
@@ -39,8 +44,9 @@ Generate OAuth credentials using `refreshToken.js`:
 
 The system automatically processes these payment confirmation emails:
 
-| Provider | Email Pattern | Calendar Action |
+| Provider | Email Pattern | Action |
 |----------|---------------|----------------|
+| **National Grid** | `nationalgridus.com` + "bill is ready" | Download PDF bill & upload to Drive |
 | **American Express** | `americanexpress.com` + "received your payment" | Delete "Pay Amex" reminders |
 | **Chase Credit Card** | `chase.com` + "credit card payment is scheduled" | Delete "Pay Chase" reminders |
 | **Chase Mortgage** | `chase.com` + "you scheduled your mortgage payment" | Delete "Pay mortgage" reminders |
@@ -56,6 +62,7 @@ Processed emails are automatically marked as read.
 - `https://www.googleapis.com/auth/gmail.readonly` - Read Gmail messages and history
 - `https://www.googleapis.com/auth/gmail.modify` - Mark messages as read
 - `https://www.googleapis.com/auth/calendar` - Read/modify calendar events
+- `https://www.googleapis.com/auth/drive.file` - Upload bills to Google Drive
 
 ### Service Account Permissions
 

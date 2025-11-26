@@ -3,7 +3,7 @@ import crypto from 'crypto';
 import fs from 'fs';
 import path from 'path';
 
-// --- Constants ---
+// Constants
 const CLIENT_ID = '36488660-e86a-4a0d-8316-3df49af8d06d';
 const MY_ACCOUNT_URL = 'https://myaccount.nationalgrid.com';
 const REDIRECT_URI = `${MY_ACCOUNT_URL}/auth-landing`;
@@ -26,7 +26,7 @@ const STATE = 'eyJpZCI6IjgwYTk5MWFkLWIxMjgtNGIwNy1iM2I1LTcyOWY3ZjJmNmY1ZSIsIm1ld
 const ACCOUNT_NUMBER = '0228222026';
 const SUBSCRIPTION_KEY = 'e674f89d7ed9417194de894b701333dd';
 
-// --- PKCE Helper Functions ---
+// PKCE Helper Functions
 function base64URLEncode(str) {
     return str.toString('base64')
         .replace(/\+/g, '-')
@@ -46,7 +46,6 @@ function generateChallenge(verifier) {
     return base64URLEncode(sha256(verifier));
 }
 
-// --- Cookie Helper ---
 /**
  * Helper class for managing cookies during the authentication flow.
  */
@@ -61,7 +60,9 @@ class CookieJar {
      * @param {string[]} headers - The 'set-cookie' headers from a fetch response.
      */
     update(headers) {
-        if (!headers) return;
+        if (!headers) {
+            return;
+        }
         headers.forEach(headerVal => {
             const parts = headerVal.split(';');
             const firstPart = parts[0];
@@ -130,12 +131,12 @@ export default class NationalGridClient {
             const creds = JSON.parse(credentialsRaw);
             this.signInName = creds.signInName;
             this.password = creds.password;
-        } catch (e) {
-            [this.signInName, this.password] = credentialsRaw.split(':');
+        } catch (error) {
+            throw new Error(`❌ Failed to parse NATIONAL_GRID_CREDENTIALS: ${error.message}`);
         }
 
         if (!this.signInName || !this.password) {
-            throw new Error('❌ Invalid credentials format. Expected JSON or "username:password"');
+            throw new Error('❌ Invalid credentials JSON. Expected "signInName" and "password" properties.');
         }
     }
 
@@ -349,8 +350,7 @@ export default class NationalGridClient {
     }
 
     /**
-     * Fetches the bill history for the account via GraphQL.
-     * Retrieves bills from the last 2 years.
+     * Fetches the bill history for the account via GraphQL and retrieves bills from the last 2 years.
      *
      * @returns {Promise<Array>} - An array of bill objects.
      * @throws {Error} If not authenticated or no bills are found.
@@ -431,8 +431,7 @@ export default class NationalGridClient {
     }
 
     /**
-     * Retrieves the most recent bill PDF.
-     * Automatically logs in if not already authenticated.
+     * Retrieves the most recent bill PDF and automatically logs in if not already authenticated.
      *
      * @returns {Promise<{buffer: Buffer, fileName: string, date: string}>} - The PDF data and metadata.
      */
@@ -462,11 +461,9 @@ export default class NationalGridClient {
         console.log(`✅ Bill PDF Response Status: ${billResponse.status}`);
 
         if (billResponse.ok) {
-            const buffer = await billResponse.arrayBuffer();
-            const fileName = `NG_Bill_${latestBillDate}.pdf`;
             return {
-                buffer: Buffer.from(buffer),
-                fileName: fileName,
+                buffer: Buffer.from(await billResponse.arrayBuffer()),
+                fileName: `NG_Bill_${latestBillDate}.pdf`,
                 date: latestBillDate
             };
         } else {

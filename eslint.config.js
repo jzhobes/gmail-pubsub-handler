@@ -11,6 +11,14 @@ export default defineConfig([
     languageOptions: { globals: globals.node }
   },
   {
+    files: ["**/*.test.js"],
+    languageOptions: {
+      globals: {
+        ...globals.jest
+      }
+    }
+  },
+  {
     files: ["**/*.json"],
     ignores: ["package-lock.json"],
     plugins: { json },

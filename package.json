@@ -14,11 +14,13 @@
         "@eslint/json": "^0.13.2",
         "eslint": "^9.38.0",
         "eslint-config-google": "^0.14.0",
-        "globals": "^16.4.0"
+        "globals": "^16.4.0",
+        "jest": "^30.2.0"
     },
     "scripts": {
         "start": "functions-framework --target=gmailPubsubHandler",
         "lint": "eslint .",
-        "test": "node index.test.js"
+        "test": "node --experimental-vm-modules node_modules/jest/bin/jest.js",
+        "test:connectivity": "node connectivity-check.js"
     }
 }

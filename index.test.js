@@ -1,87 +1,186 @@
-import 'dotenv/config';
-import { google } from 'googleapis';
+import { jest } from '@jest/globals';
+import { TransactionAutomationService } from './index.js';
 
-const { GMAIL_OAUTH_CREDENTIALS, CALENDAR_NAME } = process.env;
-if (!GMAIL_OAUTH_CREDENTIALS || !CALENDAR_NAME) {
-    throw new Error('GMAIL_OAUTH_CREDENTIALS and CALENDAR_NAME env vars are required for the debug test');
-}
-
-const { client_id, client_secret, refresh_token } = JSON.parse(GMAIL_OAUTH_CREDENTIALS);
-const auth = new google.auth.OAuth2(client_id, client_secret);
-auth.setCredentials({ refresh_token });
-const gmail = google.gmail({ version: 'v1', auth });
-const calendar = google.calendar({ version: 'v3', auth });
-
-export async function testGmailConnectivity(limit = 10) {
-    console.log(`🔬 Listing up to ${limit} recent Gmail messages`);
-    try {
-        const messagesRes = await gmail.users.messages.list({ userId: 'me', maxResults: limit });
-        const messages = messagesRes.data.messages || [];
-
-        if (!messages.length) {
-            console.log('No Gmail messages returned.');
-            return;
-        }
-
-        for (const { id } of messages) {
-            const detail = await gmail.users.messages.get({
-                userId: 'me',
-                id,
-                format: 'metadata',
-                metadataHeaders: ['Subject', 'From']
-            });
-            const headers = detail.data.payload?.headers || [];
-            const from = headers.find(h => h.name === 'From')?.value || '<no from>';
-            const subject = headers.find(h => h.name === 'Subject')?.value || '<no subject>';
-            console.log(`• ${from} — ${subject}`);
-        }
-    } catch (err) {
-        console.error(`❌ Failed to list Gmail messages: ${err.message}`);
+// Mock Google APIs (Calendar, Drive, Gmail)
+const mockCalendar = {
+    calendarList: { list: jest.fn() },
+    events: { list: jest.fn(), delete: jest.fn(), patch: jest.fn() }
+};
+const mockDrive = {
+    files: { 
+        list: jest.fn(), 
+        create: jest.fn(), 
+        update: jest.fn().mockResolvedValue({ data: { id: 'updated_file_id' } }) 
     }
-}
+};
+const mockGmail = {
+    users: {
+        messages: { modify: jest.fn() }
+    }
+};
 
-export async function testCalendarConnectivity(limit = 10) {
-    console.log(`🔬 Listing up to ${limit} events from calendar "${CALENDAR_NAME}"`);
-    try {
-        const calendarList = await calendar.calendarList.list();
-        const targetCal = calendarList.data.items?.find(c => c.summary === CALENDAR_NAME);
-        if (!targetCal) {
-            console.log(`No calendar named "${CALENDAR_NAME}" found.`);
-            return;
-        }
+describe('Transaction Handler Logic', () => {
+    let service;
 
-        const eventsRes = await calendar.events.list({
-            calendarId: targetCal.id,
-            maxResults: limit,
-            singleEvents: true,
-            orderBy: 'startTime',
-            timeMin: new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString()
+    beforeEach(() => {
+        jest.clearAllMocks();
+        
+        // Instantiate service with mocks
+        service = new TransactionAutomationService({
+            calendar: mockCalendar,
+            drive: mockDrive,
+            gmail: mockGmail,
+            // firestore: mockFirestore // Add if needed
+        }, {
+            CALENDAR_NAME: 'Test Calendar',
+            GMAIL_OAUTH_CREDENTIALS: '{}',
+            FIRESTORE_COLLECTION: 'gmail-history'
         });
-        const events = eventsRes.data.items || [];
 
-        if (!events.length) {
-            console.log('No calendar events returned.');
-            return;
-        }
-
-        for (const event of events) {
-            const start = event.start?.dateTime || event.start?.date || 'unknown start';
-            console.log(`• ${start} → ${event.summary || '<no summary>'}`);
-        }
-    } catch (err) {
-        console.error(`❌ Failed to list calendar events: ${err.message}`);
-    }
-}
-
-export async function runConnectivitySmokeTest(limit = 10) {
-    await testGmailConnectivity(limit);
-    await testCalendarConnectivity(limit);
-}
-
-if (import.meta.url === `file://${process.argv[1]}`) {
-    const limitArg = Number(process.argv[2]);
-    runConnectivitySmokeTest(Number.isFinite(limitArg) ? limitArg : undefined).catch(err => {
-        console.error(err);
-        process.exitCode = 1;
+        // Default Calendar Mock Behavior
+        mockCalendar.calendarList.list.mockResolvedValue({
+            data: { items: [{ summary: 'Test Calendar', id: 'cal_123' }] }
+        });
+        mockCalendar.events.list.mockResolvedValue({ data: { items: [] } });
     });
-}
+
+    describe('National Grid', () => {
+        it('downloads bill and uploads to Drive', async () => {
+            // Mock NationalGridClient
+            const mockGetCurrentBill = jest.fn().mockResolvedValue({
+                buffer: Buffer.from('fake-pdf'),
+                fileName: 'bill.pdf'
+            });
+
+            // Re-instantiate with NationalGridClient mock
+            service = new TransactionAutomationService({
+                calendar: mockCalendar,
+                drive: mockDrive,
+                gmail: mockGmail,
+                nationalGrid: { getCurrentBill: mockGetCurrentBill }
+            }, {
+                CALENDAR_NAME: 'Test Calendar',
+                GMAIL_OAUTH_CREDENTIALS: '{}',
+                FIRESTORE_COLLECTION: 'gmail-history'
+            });
+
+            // Mock Drive behavior
+            mockDrive.files.list
+                .mockResolvedValueOnce({ data: { files: [{ id: 'folder_root' }] } }) // House
+                .mockResolvedValueOnce({ data: { files: [{ id: 'folder_ng' }] } })   // National Grid Bills
+                .mockResolvedValueOnce({ data: { files: [] } });                     // check if file exists
+            mockDrive.files.create.mockResolvedValue({ data: { id: 'file_456' } });
+
+            const result = await service.handleTransaction({
+                from: 'customerservice@nationalgridus.com',
+                subject: 'Your National Grid bill is ready',
+                message: {}
+            });
+
+            expect(result).toBe(true);
+            expect(mockGetCurrentBill).toHaveBeenCalled();
+            expect(mockDrive.files.create).toHaveBeenCalledWith(expect.objectContaining({
+                resource: expect.objectContaining({ name: 'bill.pdf' })
+            }));
+        });
+        // Remove skip to run integration test.
+        it.skip('INTEGRATION: actually downloads bill and uploads to Drive', async () => {
+            // Ensure .env has valid credentials before running this!
+            const realService = new TransactionAutomationService();
+
+            const result = await realService.handleTransaction({
+                from: 'customerservice@nationalgridus.com',
+                subject: 'Your National Grid bill is ready',
+                message: {}
+            });
+
+            expect(result).toBe(true);
+        }, 10000); // Increased timeout for real network requests
+    });
+
+    describe('Capital One', () => {
+        it('deletes "Pay AT&T" event', async () => {
+            // Override the default empty list behavior for this specific test
+            mockCalendar.events.list.mockResolvedValue({
+                data: { items: [{ id: 'evt_1', summary: 'Pay AT&T', start: { date: '2023-01-01' } }] }
+            });
+
+            const result = await service.handleTransaction({
+                from: 'capitalone@capitalone.com',
+                subject: 'Withdrawal Notice',
+                message: {
+                    data: {
+                        payload: {
+                            mimeType: 'text/plain',
+                            body: { data: Buffer.from('ATT has initiated a withdrawal').toString('base64') }
+                        }
+                    }
+                }
+            });
+
+            expect(result).toBe(true);
+            expect(mockCalendar.events.delete).toHaveBeenCalledWith(expect.objectContaining({
+                calendarId: 'cal_123',
+                eventId: 'evt_1'
+            }));
+        });
+
+        it('ignores unknown withdrawal', async () => {
+            const result = await service.handleTransaction({
+                from: 'capitalone@capitalone.com',
+                subject: 'Withdrawal Notice',
+                message: {
+                    data: {
+                        payload: {
+                            mimeType: 'text/plain',
+                            body: { data: Buffer.from('Unknown Merchant has initiated').toString('base64') }
+                        }
+                    }
+                }
+            });
+            expect(result).toBe(false);
+            expect(mockCalendar.events.delete).not.toHaveBeenCalled();
+        });
+    });
+
+    describe('Amex', () => {
+        it('deletes "Pay Amex" event for next month', async () => {
+            mockCalendar.events.list.mockImplementation(() => Promise.resolve({
+                data: { items: [{ id: 'evt_amex', summary: 'Pay Amex', start: { date: '2023-02-01' } }] }
+            }));
+
+            const result = await service.handleTransaction({
+                from: 'AmericanExpress@welcome.americanexpress.com',
+                subject: 'We received your payment',
+                message: {}
+            });
+
+            expect(result).toBe(true);
+            expect(mockCalendar.events.delete).toHaveBeenCalledWith(expect.objectContaining({
+                eventId: 'evt_amex'
+            }));
+        });
+    });
+});
+
+// describe('Integration: Google Drive Upload', () => {
+//     // Only run if NOT mocked (controlled via flag or just run manually)
+//     // For now, we assume the user wants to test this specifically.
+    
+//     it('actually uploads a test file to Drive', async () => {
+//         // We use the REAL uploadToDrive here, not the spy.
+//         // Ensure we have a valid buffer.
+//         const fakeFile = {
+//             buffer: Buffer.from('This is a test file from Jest integration test.'),
+//             fileName: `Jest_Test_Upload_${Date.now()}.txt`
+//         };
+
+//         try {
+//             await index.uploadToDrive(fakeFile, 'House/Test Uploads');
+//             // If it doesn't throw, it succeeded.
+//         } catch (err) {
+//             // If it fails (e.g. auth error), fail the test
+//             throw err;
+//         }
+//     });
+// });
