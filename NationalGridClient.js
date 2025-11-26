@@ -18,8 +18,6 @@ const SELF_ASSERTED_URL = `${BASE_URL}/SelfAsserted`;
 const CONFIRMED_URL = `${BASE_URL}/api/CombinedSigninAndSignup/confirmed`;
 const POLICY = 'B2C_1A_NationalGrid_convert_merge_signin';
 
-
-
 // PKCE Helper Functions
 function base64URLEncode(str) {
     return str.toString('base64')
