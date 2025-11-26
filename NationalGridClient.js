@@ -18,13 +18,7 @@ const SELF_ASSERTED_URL = `${BASE_URL}/SelfAsserted`;
 const CONFIRMED_URL = `${BASE_URL}/api/CombinedSigninAndSignup/confirmed`;
 const POLICY = 'B2C_1A_NationalGrid_convert_merge_signin';
 
-// Fixed parameters for the initial request to match the browser flow
-const CLIENT_REQUEST_ID = 'f3f8b223-2b00-4a58-8ec9-9a8ebe6104d0';
-const STATE = 'eyJpZCI6IjgwYTk5MWFkLWIxMjgtNGIwNy1iM2I1LTcyOWY3ZjJmNmY1ZSIsIm1ldGEiOnsiaW50ZXJhY3Rpb25UeXBlIjoicmVkaXJlY3QifX0=';
 
-// User Specific Constants
-const ACCOUNT_NUMBER = '0228222026';
-const SUBSCRIPTION_KEY = 'e674f89d7ed9417194de894b701333dd';
 
 // PKCE Helper Functions
 function base64URLEncode(str) {
@@ -131,12 +125,14 @@ export default class NationalGridClient {
             const creds = JSON.parse(credentialsRaw);
             this.signInName = creds.signInName;
             this.password = creds.password;
+            this.accountNumber = creds.accountNumber;
+            this.subscriptionKey = creds.subscriptionKey;
         } catch (error) {
             throw new Error(`❌ Failed to parse NATIONAL_GRID_CREDENTIALS: ${error.message}`);
         }
 
-        if (!this.signInName || !this.password) {
-            throw new Error('❌ Invalid credentials JSON. Expected "signInName" and "password" properties.');
+        if (!this.signInName || !this.password || !this.accountNumber || !this.subscriptionKey) {
+            throw new Error('❌ Invalid credentials JSON. Expected "signInName", "password", "accountNumber", and "subscriptionKey".');
         }
     }
 
@@ -150,9 +146,12 @@ export default class NationalGridClient {
         this.loadCredentials();
         console.log('🚀 Starting National Grid login process...');
 
-        // Generate PKCE
+        // Generate PKCE and State
         const codeVerifier = generateVerifier();
         const codeChallenge = generateChallenge(codeVerifier);
+        const clientRequestId = crypto.randomUUID();
+        const state = base64URLEncode(crypto.randomBytes(32));
+
         console.log(`🔑 Generated PKCE Verifier: ${codeVerifier}`);
 
         // 1. Initial GET request to establish session
@@ -160,7 +159,7 @@ export default class NationalGridClient {
             client_id: CLIENT_ID,
             scope: SCOPE,
             redirect_uri: REDIRECT_URI,
-            'client-request-id': CLIENT_REQUEST_ID,
+            'client-request-id': clientRequestId,
             response_mode: 'fragment',
             response_type: 'code',
             'x-client-SKU': 'msal.js.browser',
@@ -168,7 +167,7 @@ export default class NationalGridClient {
             client_info: '1',
             code_challenge: codeChallenge,
             code_challenge_method: 'S256',
-            state: STATE,
+            state: state,
             region: 'nyupstate',
             customer_type: 'home'
         });
@@ -396,7 +395,7 @@ export default class NationalGridClient {
                 }
             `,
             variables: {
-                accountNumber: ACCOUNT_NUMBER,
+                accountNumber: this.accountNumber,
                 dateForNumberOfDaysAgo: dateForNumberOfDaysAgo
             }
         };
@@ -405,8 +404,8 @@ export default class NationalGridClient {
             method: 'POST',
             headers: {
                 'Authorization': `Bearer ${this.accessToken}`,
-                'Ocp-Apim-Subscription-Key': SUBSCRIPTION_KEY,
-                'Account-Number': ACCOUNT_NUMBER,
+                'Ocp-Apim-Subscription-Key': this.subscriptionKey,
+                'Account-Number': this.accountNumber,
                 'Content-Type': 'application/json'
             },
             body: JSON.stringify(gqlQuery)
@@ -449,8 +448,8 @@ export default class NationalGridClient {
 
         const headers = {
             'Authorization': `Bearer ${this.accessToken}`,
-            'Ocp-Apim-Subscription-Key': SUBSCRIPTION_KEY,
-            'Account-Number': ACCOUNT_NUMBER
+            'Ocp-Apim-Subscription-Key': this.subscriptionKey,
+            'Account-Number': this.accountNumber
         };
 
         const billResponse = await fetch(billUrl, {
@@ -472,7 +471,7 @@ export default class NationalGridClient {
 
             if (billResponse.status === 401 || billResponse.status === 403) {
                 console.error('\n🚫 AUTHENTICATION ERROR: The Subscription Key may have expired or changed.');
-                console.error(`👉 Please check the "Ocp-Apim-Subscription-Key" header in your browser's network tab for ${MY_ACCOUNT_URL} and update the SUBSCRIPTION_KEY constant.\n`);
+                console.error(`👉 Please check the "Ocp-Apim-Subscription-Key" header in your browser's network tab for ${MY_ACCOUNT_URL} and update the subscriptionKey in NATIONAL_GRID_CREDENTIALS.\n`);
             }
 
             throw new Error(`❌ Failed to retrieve bill PDF: ${billResponse.status}`);
