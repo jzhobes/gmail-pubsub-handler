@@ -200,7 +200,10 @@ export class TransactionAutomationService {
         const subj = subject.toLowerCase();
 
         // ✅ National Grid Bill
-        if (sender.includes('nationalgridus.com') && subj.includes('national grid bill')) {
+        // Check subject AND body for original sender (handles forwards)
+        const body = extractEmailBody(message).toLowerCase();
+        const isNationalGridEmail = subj.includes('national grid bill') && (sender.includes('nationalgridus.com') || /from:.*nationalgridus\.com/.test(body));
+        if (isNationalGridEmail) {
             console.log(`⚡ Checking National Grid bill for "${subject}"`);
             try {
                 if (!this.nationalGrid) {
