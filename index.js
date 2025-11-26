@@ -2,11 +2,13 @@ import 'dotenv/config';
 import { cloudEvent } from '@google-cloud/functions-framework';
 import { Firestore } from '@google-cloud/firestore';
 import { google } from 'googleapis';
+import { Readable } from 'stream';
+import NationalGridClient from './NationalGridClient.js';
 import { checkAndMarkMessageProcessed } from './deduplication.js';
 
 const { GMAIL_OAUTH_CREDENTIALS, FIRESTORE_COLLECTION, CALENDAR_NAME } = process.env;
 if (!GMAIL_OAUTH_CREDENTIALS || !FIRESTORE_COLLECTION || !CALENDAR_NAME) {
-    throw new Error('GMAIL_OAUTH_CREDENTIALS, FIRESTORE_COLLECTION, and CALENDAR_NAME env vars are required');
+    throw new Error('❌ GMAIL_OAUTH_CREDENTIALS, FIRESTORE_COLLECTION, and CALENDAR_NAME env vars are required');
 }
 
 // Initialize Firestore
@@ -18,8 +20,9 @@ const auth = new google.auth.OAuth2(client_id, client_secret);
 auth.setCredentials({ refresh_token });
 const gmail = google.gmail({ version: 'v1', auth });
 const calendar = google.calendar({ version: 'v3', auth });
+const drive = google.drive({ version: 'v3', auth });
 
-// Handle Pub/Sub Gmail push notifications
+// Main entry point: handles Pub/Sub Gmail push notifications (core method)
 cloudEvent('gmailPubSubHandler', async cloudEvent => {
     try {
         const message = cloudEvent.data?.message;
@@ -155,6 +158,20 @@ async function handleTransaction({ from, subject, message }) {
     const sender = from.toLowerCase();
     const subj = subject.toLowerCase();
 
+    // ✅ National Grid Bill
+    if (sender.includes('nationalgridus.com') && subj.includes('national grid bill')) {
+        console.log(`⚡ Checking National Grid bill for "${subject}"`);
+        try {
+            const client = new NationalGridClient();
+            const billData = await client.getCurrentBill();
+            await uploadToDrive(billData, 'House/National Grid Bills');
+            return true;
+        } catch (error) {
+            console.error(`❌ Failed to process National Grid bill: ${error.message}`);
+            return false;
+        }
+    }
+
     // ✅ Capital One withdrawal notice
     if (sender.includes('capitalone.com') && subj.includes('withdrawal notice')) {
         console.log(`🏦 Checking Capital One withdrawal notice for "${subject}"`);
@@ -236,6 +253,88 @@ async function handleTransaction({ from, subject, message }) {
 
     console.log(`📖 Ignoring email from "${from}" and subject "${subject}"`);
     return false;
+}
+
+/**
+ * Uploads a file to Google Drive, creating folders if they don't exist.
+ *
+ * @param {Object} fileData - The file data returned from NationalGridClient.
+ * @param {Buffer} fileData.buffer - The file content.
+ * @param {string} fileData.fileName - The name of the file.
+ * @param {string} folderPath - The path to upload to (e.g., 'House/National Grid Bills').
+ */
+async function uploadToDrive(fileData, folderPath) {
+    const folders = folderPath.split('/');
+    let parentId = null; // root
+
+    // Find or create folders
+    for (const folderName of folders) {
+        parentId = await findOrCreateFolder(folderName, parentId);
+    }
+
+    // Upload file
+    const fileMetadata = {
+        name: fileData.fileName,
+        parents: [parentId]
+    };
+
+    const media = {
+        mimeType: 'application/pdf',
+        body: Readable.from(fileData.buffer)
+    };
+
+    try {
+        const file = await drive.files.create({
+            resource: fileMetadata,
+            media: media,
+            fields: 'id'
+        });
+        console.log(`☁️ Uploaded "${fileData.fileName}" to Drive (ID: ${file.data.id})`);
+    } catch (error) {
+        console.error(`❌ Drive upload failed: ${error.message}`);
+        throw error;
+    }
+}
+
+/**
+ * Finds or creates a folder in Google Drive.
+ *
+ * @param {string} name - The name of the folder.
+ * @param {string} [parentId] - The ID of the parent folder (optional).
+ * @returns {Promise<string>} - The ID of the found or created folder.
+ */
+async function findOrCreateFolder(name, parentId) {
+    const query = `mimeType='application/vnd.google-apps.folder' and name='${name}' and trashed=false ${parentId ? `and '${parentId}' in parents` : "and 'root' in parents"}`;
+
+    try {
+        const res = await drive.files.list({
+            q: query,
+            fields: 'files(id, name)',
+            spaces: 'drive'
+        });
+
+        if (res.data.files.length > 0) {
+            return res.data.files[0].id;
+        }
+
+        // Create folder
+        const fileMetadata = {
+            name: name,
+            mimeType: 'application/vnd.google-apps.folder',
+            parents: parentId ? [parentId] : []
+        };
+
+        const file = await drive.files.create({
+            resource: fileMetadata,
+            fields: 'id'
+        });
+
+        console.log(`wd Created folder "${name}" (ID: ${file.data.id})`);
+        return file.data.id;
+    } catch (error) {
+        console.error(`❌ Error finding/creating folder "${name}": ${error.message}`);
+        throw error;
+    }
 }
 
 /**
