@@ -18,7 +18,7 @@
         "jest": "^30.2.0"
     },
     "scripts": {
-        "start": "functions-framework --target=gmailPubsubHandler",
+        "start": "functions-framework --target=gmailPubSubHandler",
         "lint": "eslint .",
         "test": "node --experimental-vm-modules node_modules/jest/bin/jest.js",
         "test:connectivity": "node connectivity-check.js"

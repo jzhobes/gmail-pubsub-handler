@@ -501,7 +501,7 @@ function extractEmailBody(message) {
 const automationService = new TransactionAutomationService();
 
 // Main entry point
-const gmailPubsubHandler = (event) => automationService.handleEvent(event);
+const gmailPubSubHandler = (event) => automationService.handleEvent(event);
 
 // Register the function with the Functions Framework
-cloudEvent('gmailPubsubHandler', gmailPubsubHandler);
+cloudEvent('gmailPubSubHandler', gmailPubSubHandler);
