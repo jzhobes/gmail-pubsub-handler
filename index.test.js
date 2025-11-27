@@ -7,10 +7,10 @@ const mockCalendar = {
     events: { list: jest.fn(), delete: jest.fn(), patch: jest.fn() }
 };
 const mockDrive = {
-    files: { 
-        list: jest.fn(), 
-        create: jest.fn(), 
-        update: jest.fn().mockResolvedValue({ data: { id: 'updated_file_id' } }) 
+    files: {
+        list: jest.fn(),
+        create: jest.fn(),
+        update: jest.fn().mockResolvedValue({ data: { id: 'updated_file_id' } })
     }
 };
 const mockGmail = {
@@ -24,7 +24,7 @@ describe('Transaction Handler Logic', () => {
 
     beforeEach(() => {
         jest.clearAllMocks();
-        
+
         // Instantiate service with mocks
         service = new TransactionAutomationService({
             calendar: mockCalendar,
@@ -83,15 +83,128 @@ describe('Transaction Handler Logic', () => {
                 resource: expect.objectContaining({ name: 'bill.pdf' })
             }));
         });
+
         // Remove skip to run integration test.
         it.skip('INTEGRATION: actually downloads bill and uploads to Drive', async () => {
             // Ensure .env has valid credentials before running this!
             const realService = new TransactionAutomationService();
 
+            // Search for the most recent National Grid bill email
+            const searchResponse = await realService.gmail.users.messages.list({
+                userId: 'me',
+                q: 'subject:"national grid bill"',
+                maxResults: 1
+            });
+
+            if (!searchResponse?.data?.messages?.length) {
+                throw new Error('No National Grid bill emails found in Gmail. Send yourself a test email first.');
+            }
+
+            const messageId = searchResponse.data.messages[0].id;
+            const msg = await realService.gmail.users.messages.get({
+                userId: 'me',
+                id: messageId
+            });
+
+            const subject = msg.data.payload.headers.find(h => h.name === 'Subject')?.value || '';
+            const from = msg.data.payload.headers.find(h => h.name === 'From')?.value || '';
+
             const result = await realService.handleTransaction({
-                from: 'customerservice@nationalgridus.com',
-                subject: 'Your National Grid bill is ready',
-                message: {}
+                from,
+                subject,
+                message: msg
+            });
+
+            expect(result).toBe(true);
+        }, 10000); // Increased timeout for real network requests
+    });
+
+    describe('Sunrun', () => {
+        it('extracts PDF attachment and uploads to Drive', async () => {
+            // Mock Gmail attachment extraction
+            const mockAttachmentData = Buffer.from('fake-sunrun-pdf');
+            mockGmail.users.messages = {
+                ...mockGmail.users.messages,
+                attachments: {
+                    get: jest.fn().mockResolvedValue({
+                        data: {
+                            data: mockAttachmentData.toString('base64')
+                        }
+                    })
+                }
+            };
+
+            // Mock Drive behavior
+            mockDrive.files.list
+                .mockResolvedValueOnce({ data: { files: [{ id: 'folder_house' }] } })    // House
+                .mockResolvedValueOnce({ data: { files: [{ id: 'folder_sunrun' }] } })   // Sunrun Bills
+                .mockResolvedValueOnce({ data: { files: [] } });                         // check if file exists
+            mockDrive.files.create.mockResolvedValue({ data: { id: 'sunrun_file_123' } });
+
+            const result = await service.handleTransaction({
+                from: 'billing@sunrun.com',
+                subject: 'Your Sunrun Bill is Ready',
+                message: {
+                    data: {
+                        id: 'msg_sunrun_123',
+                        payload: {
+                            headers: [
+                                { name: 'Date', value: 'Wed, 15 Nov 2023 10:00:00 -0500' }
+                            ],
+                            parts: [
+                                {
+                                    mimeType: 'application/pdf',
+                                    filename: 'sunrun_bill.pdf',
+                                    body: { attachmentId: 'att_123' }
+                                }
+                            ]
+                        }
+                    }
+                }
+            });
+
+            expect(result).toBe(true);
+            expect(mockGmail.users.messages.attachments.get).toHaveBeenCalledWith({
+                userId: 'me',
+                messageId: 'msg_sunrun_123',
+                id: 'att_123'
+            });
+            expect(mockDrive.files.create).toHaveBeenCalledWith(expect.objectContaining({
+                resource: expect.objectContaining({
+                    name: expect.stringMatching(/^Sunrun_Bill_\d{4}-\d{2}-\d{2}\.pdf$/)
+                })
+            }));
+        });
+
+        // Remove skip to run integration test.
+        it.skip('INTEGRATION: actually extracts PDF and uploads to Drive', async () => {
+            // Ensure .env has valid credentials before running this!
+            const realService = new TransactionAutomationService();
+
+            // Search for the most recent Sunrun bill email
+            const searchResponse = await realService.gmail.users.messages.list({
+                userId: 'me',
+                q: 'subject:"your sunrun bill"',
+                maxResults: 1
+            });
+
+            if (!searchResponse?.data?.messages?.length) {
+                throw new Error('No Sunrun bill emails found in Gmail. Send yourself a test email first.');
+            }
+
+            const messageId = searchResponse.data.messages[0].id;
+            const msg = await realService.gmail.users.messages.get({
+                userId: 'me',
+                id: messageId
+            });
+
+            const subject = msg.data.payload.headers.find(h => h.name === 'Subject')?.value || '';
+            const from = msg.data.payload.headers.find(h => h.name === 'From')?.value || '';
+
+            const result = await realService.handleTransaction({
+                from,
+                subject,
+                message: msg
             });
 
             expect(result).toBe(true);
@@ -162,25 +275,3 @@ describe('Transaction Handler Logic', () => {
         });
     });
 });
-
-// describe('Integration: Google Drive Upload', () => {
-//     // Only run if NOT mocked (controlled via flag or just run manually)
-//     // For now, we assume the user wants to test this specifically.
-    
-//     it('actually uploads a test file to Drive', async () => {
-//         // We use the REAL uploadToDrive here, not the spy.
-//         // Ensure we have a valid buffer.
-//         const fakeFile = {
-//             buffer: Buffer.from('This is a test file from Jest integration test.'),
-//             fileName: `Jest_Test_Upload_${Date.now()}.txt`
-//         };
-
-//         try {
-//             await index.uploadToDrive(fakeFile, 'House/Test Uploads');
-//             // If it doesn't throw, it succeeded.
-//         } catch (err) {
-//             // If it fails (e.g. auth error), fail the test
-//             throw err;
-//         }
-//     });
-// });

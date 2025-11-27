@@ -30,7 +30,7 @@ Gmail → Pub/Sub Topic → Cloud Run → Google Calendar
 | `GMAIL_OAUTH_CREDENTIALS` | ✅ | JSON string containing `client_id`, `client_secret`, and `refresh_token` used for Gmail/Calendar/Drive access. |
 | `FIRESTORE_COLLECTION` | ✅ | Name of the Firestore collection used to persist the latest Gmail history IDs per mailbox. |
 | `CALENDAR_NAME` | ✅ | Google Calendar display name that will be queried and updated by the payment handlers. |
-| `NATIONAL_GRID_CREDENTIALS` | ❌ | (Optional) JSON string or `user:pass` for National Grid account access. Required for bill downloading. |
+| `NATIONAL_GRID_CREDENTIALS` | ❌ | (Optional) JSON string containing `signInName`, `password`, `accountNumber`, and `subscriptionKey` for National Grid account access. |
 
 ## OAuth Setup
 
@@ -47,6 +47,7 @@ The system automatically processes these payment confirmation emails:
 | Provider | Email Pattern | Action |
 |----------|---------------|----------------|
 | **National Grid** | `nationalgridus.com` + "bill is ready" | Download PDF bill & upload to Drive |
+| **Sunrun** | Subject "sunrun bill" + Sender/Body "sunrun" | Extract PDF attachment & upload to Drive |
 | **American Express** | `americanexpress.com` + "received your payment" | Delete "Pay Amex" reminders |
 | **Chase Credit Card** | `chase.com` + "credit card payment is scheduled" | Delete "Pay Chase" reminders |
 | **Chase Mortgage** | `chase.com` + "you scheduled your mortgage payment" | Delete "Pay mortgage" reminders |
@@ -100,6 +101,24 @@ Occurs when OAuth credentials lack required scopes. Regenerate refresh token wit
 - Run the Gmail/Calendar smoke test helper: `npm test` (or `node index.test.js 15` to raise the fetch limit)
 
 The test harness expects the same environment variables/secret JSON that production uses.
+
+## Testing
+
+### Unit Tests
+Run the standard unit test suite (mocks external services):
+```bash
+npm test
+```
+
+### Integration Tests
+To run integration tests that interact with real Gmail, Drive, and National Grid APIs:
+1. Ensure your `.env` file has valid credentials.
+2. Remove `.skip` from the integration tests in `index.test.js`.
+3. Run the tests:
+```bash
+npm test -- --testNamePattern="INTEGRATION"
+```
+**Note:** Integration tests require real emails in your inbox to function (e.g., a real National Grid or Sunrun bill email).
 
 ## License
 

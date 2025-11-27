@@ -182,7 +182,7 @@ export default class NationalGridClient {
 
         // Extract Cookies
         this.cookieJar.update(getResponse.headers.getSetCookie());
-        if (this.cookieJar.cookies.size === 0) {
+        if (!this.cookieJar.cookies?.size) {
             throw new Error('❌ No cookies received from initial request');
         }
 
@@ -420,7 +420,7 @@ export default class NationalGridClient {
         const billCount = bills.length;
         console.log(`📉 Found ${billCount} bills in history.`);
 
-        if (billCount === 0) {
+        if (!billCount) {
             throw new Error('❌ ⚠️ No bills found in history.');
         }
 

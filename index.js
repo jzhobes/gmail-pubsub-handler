@@ -198,12 +198,11 @@ export class TransactionAutomationService {
     async handleTransaction({ from, subject, message }) {
         const sender = from.toLowerCase();
         const subj = subject.toLowerCase();
+        const body = extractEmailBody(message).toLowerCase();
 
         // ✅ National Grid Bill
         // Check subject AND body for original sender (handles forwards)
-        const body = extractEmailBody(message).toLowerCase();
-        const isNationalGridEmail = subj.includes('national grid bill') && (sender.includes('nationalgridus.com') || /from:.*nationalgridus\.com/.test(body));
-        if (isNationalGridEmail) {
+        if ((sender.includes('nationalgridus.com') || /from:.*nationalgridus\.com/.test(body)) && subj.includes('national grid bill')) {
             console.log(`⚡ Checking National Grid bill for "${subject}"`);
             try {
                 if (!this.nationalGrid) {
@@ -216,6 +215,36 @@ export class TransactionAutomationService {
                 return true;
             } catch (error) {
                 console.error(`❌ Failed to process National Grid bill: ${error.message}`);
+                return false;
+            }
+        }
+
+        // ✅ Sunrun Bill
+        // Check subject AND body for original sender (handles forwards)
+        if ((sender.includes('sunrun.com') || /from:.*sunrun\.com/.test(body)) && subj.includes('sunrun bill')) {
+            console.log(`☀️ Checking Sunrun bill for "${subject}"`);
+            try {
+                // Extract the email date
+                const dateHeader = message.data.payload.headers.find(h => h.name === 'Date')?.value;
+                const emailDate = dateHeader ? new Date(dateHeader) : new Date();
+                const dateStr = emailDate.toISOString().split('T')[0]; // yyyy-mm-dd
+
+                // Extract PDF attachment
+                const pdfAttachment = await this.extractPdfAttachment(message);
+                if (!pdfAttachment) {
+                    console.error('❌ No PDF attachment found in Sunrun email');
+                    return false;
+                }
+
+                const billData = {
+                    buffer: pdfAttachment.data,
+                    fileName: `Sunrun_Bill_${dateStr}.pdf`
+                };
+
+                await this.uploadToDrive(billData, 'House/Sunrun Bills');
+                return true;
+            } catch (error) {
+                console.error(`❌ Failed to process Sunrun bill: ${error.message}`);
                 return false;
             }
         }
@@ -298,6 +327,51 @@ export class TransactionAutomationService {
 
         console.log(`📖 Ignoring email from "${from}" and subject "${subject}"`);
         return false;
+    }
+
+    /**
+     * Extracts the first PDF attachment from a Gmail message.
+     *
+     * @param {Object} message - Gmail message object
+     * @returns {Promise<{data: Buffer, filename: string} | null>}
+     */
+    async extractPdfAttachment(message) {
+        const parts = message.data.payload.parts || [];
+
+        // Recursively search for PDF attachments
+        const findPdfPart = (parts) => {
+            for (const part of parts) {
+                // Check if this part is a PDF
+                if (part.mimeType === 'application/pdf' && part.body?.attachmentId) {
+                    return part;
+                }
+                // Recursively check nested parts
+                if (part.parts) {
+                    const found = findPdfPart(part.parts);
+                    if (found) {
+                        return found;
+                    }
+                }
+            }
+            return null;
+        };
+
+        const pdfPart = findPdfPart(parts);
+        if (!pdfPart) {
+            return null;
+        }
+
+        // Download the attachment
+        const attachment = await this.gmail.users.messages.attachments.get({
+            userId: 'me',
+            messageId: message.data.id,
+            id: pdfPart.body.attachmentId
+        });
+
+        return {
+            data: Buffer.from(attachment.data.data, 'base64'),
+            filename: pdfPart.filename || 'attachment.pdf'
+        };
     }
 
     /**
@@ -474,30 +548,38 @@ export class TransactionAutomationService {
  * Helper to extract email body.
  */
 function extractEmailBody(message) {
-    const { payload } = message.data;
+    const payload = message?.data?.payload;
+    if (!payload) {
+        return '';
+    }
+
     const decode = (data) => Buffer.from(data, 'base64').toString('utf8');
 
-    if (payload.mimeType === 'text/plain' && payload.body?.data) {
-        return decode(payload.body.data);
-    }
-
-    if (payload.mimeType === 'text/html' && payload.body?.data) {
-        return decode(payload.body.data);
-    }
-
-    if (payload.parts) {
-        const plainPart = payload.parts.find(p => p.mimeType === 'text/plain' && p.body?.data);
-        if (plainPart) {
-            return decode(plainPart.body.data);
+    // Recursive function to find text content in nested parts
+    const findTextContent = (part) => {
+        // Check if this part has text content directly
+        if (part.mimeType === 'text/plain' && part.body?.data) {
+            return decode(part.body.data);
         }
 
-        const htmlPart = payload.parts.find(p => p.mimeType === 'text/html' && p.body?.data);
-        if (htmlPart) {
-            return decode(htmlPart.body.data);
+        if (part.mimeType === 'text/html' && part.body?.data) {
+            return decode(part.body.data);
         }
-    }
 
-    return '';
+        // Recursively search nested parts
+        if (part.parts) {
+            for (const subPart of part.parts) {
+                const content = findTextContent(subPart);
+                if (content) {
+                    return content;
+                }
+            }
+        }
+
+        return '';
+    };
+
+    return findTextContent(payload);
 }
 
 // Initialize service outside the handler to reuse it across invocations
