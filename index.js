@@ -15,7 +15,9 @@ export class TransactionAutomationService {
      * @param {Object} [services.gmail]
      * @param {Object} [services.calendar]
      * @param {Object} [services.drive]
+     * @param {Object} [services.drive]
      * @param {Object} [services.nationalGrid]
+     * @param {Object} [services.sunrun]
      * @param {Object} [config] - Configuration overrides (default: process.env).
      */
     constructor(services = {}, config = process.env) {
@@ -26,7 +28,9 @@ export class TransactionAutomationService {
         this.gmail = services.gmail;
         this.calendar = services.calendar;
         this.drive = services.drive;
+        this.drive = services.drive;
         this.nationalGrid = services.nationalGrid;
+        this.sunrun = services.sunrun;
 
         this.#initializeServices();
     }
@@ -224,22 +228,15 @@ export class TransactionAutomationService {
         if ((sender.includes('sunrun.com') || /from:.*sunrun\.com/.test(body)) && subj.includes('sunrun bill')) {
             console.log(`☀️ Checking Sunrun bill for "${subject}"`);
             try {
-                // Extract the email date
-                const dateHeader = message.data.payload.headers.find(h => h.name === 'Date')?.value;
-                const emailDate = dateHeader ? new Date(dateHeader) : new Date();
-                const dateStr = emailDate.toISOString().split('T')[0]; // yyyy-mm-dd
-
-                // Extract PDF attachment
-                const pdfAttachment = await this.extractPdfAttachment(message);
-                if (!pdfAttachment) {
-                    console.error('❌ No PDF attachment found in Sunrun email');
-                    return false;
+                if (!this.sunrun) {
+                    const { default: SunrunClient } = await import('./SunrunClient.js');
+                    this.sunrun = new SunrunClient();
                 }
 
-                const billData = {
-                    buffer: pdfAttachment.data,
-                    fileName: `Sunrun_Bill_${dateStr}.pdf`
-                };
+                const billData = await this.sunrun.getBillFromMessage(message, this.gmail);
+                if (!billData) {
+                    return false;
+                }
 
                 await this.uploadToDrive(billData, 'House/Sunrun Bills');
                 return true;
@@ -327,51 +324,6 @@ export class TransactionAutomationService {
 
         console.log(`📖 Ignoring email from "${from}" and subject "${subject}"`);
         return false;
-    }
-
-    /**
-     * Extracts the first PDF attachment from a Gmail message.
-     *
-     * @param {Object} message - Gmail message object
-     * @returns {Promise<{data: Buffer, filename: string} | null>}
-     */
-    async extractPdfAttachment(message) {
-        const parts = message.data.payload.parts || [];
-
-        // Recursively search for PDF attachments
-        const findPdfPart = (parts) => {
-            for (const part of parts) {
-                // Check if this part is a PDF
-                if (part.mimeType === 'application/pdf' && part.body?.attachmentId) {
-                    return part;
-                }
-                // Recursively check nested parts
-                if (part.parts) {
-                    const found = findPdfPart(part.parts);
-                    if (found) {
-                        return found;
-                    }
-                }
-            }
-            return null;
-        };
-
-        const pdfPart = findPdfPart(parts);
-        if (!pdfPart) {
-            return null;
-        }
-
-        // Download the attachment
-        const attachment = await this.gmail.users.messages.attachments.get({
-            userId: 'me',
-            messageId: message.data.id,
-            id: pdfPart.body.attachmentId
-        });
-
-        return {
-            data: Buffer.from(attachment.data.data, 'base64'),
-            filename: pdfPart.filename || 'attachment.pdf'
-        };
     }
 
     /**

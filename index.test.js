@@ -208,7 +208,7 @@ describe('Transaction Handler Logic', () => {
             });
 
             expect(result).toBe(true);
-        }, 10000); // Increased timeout for real network requests
+        }, 30000); // Increased timeout for real network requests
     });
 
     describe('Capital One', () => {
