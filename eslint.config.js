@@ -1,28 +1,30 @@
-import js from "@eslint/js";
-import globals from "globals";
-import json from "@eslint/json";
-import { defineConfig } from "eslint/config";
+import js from '@eslint/js';
+import globals from 'globals';
+import json from '@eslint/json';
+import { defineConfig } from 'eslint/config';
+import prettier from 'eslint-config-prettier';
 
 export default defineConfig([
   {
-    files: ["**/*.{js,mjs,cjs}"],
+    files: ['**/*.{js,mjs,cjs}'],
     plugins: { js },
-    extends: ["js/recommended"],
-    languageOptions: { globals: globals.node }
+    extends: ['js/recommended'],
+    languageOptions: { globals: globals.node },
   },
   {
-    files: ["**/*.test.js"],
+    files: ['**/*.test.js'],
     languageOptions: {
       globals: {
-        ...globals.jest
-      }
-    }
+        ...globals.jest,
+      },
+    },
   },
   {
-    files: ["**/*.json"],
-    ignores: ["package-lock.json"],
+    files: ['**/*.json'],
+    ignores: ['package-lock.json'],
     plugins: { json },
-    language: "json/json",
-    extends: ["json/recommended"]
-  }
+    language: 'json/json',
+    extends: ['json/recommended'],
+  },
+  prettier,
 ]);

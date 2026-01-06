@@ -1,27 +1,35 @@
 {
-    "type": "module",
-    "engines": {
-        "node": ">=22"
-    },
-    "dependencies": {
-        "@google-cloud/firestore": "^7.8.0",
-        "@google-cloud/functions-framework": "^4.0.0",
-        "dotenv": "^17.2.3",
-        "googleapis": "^164.1.0",
-        "pdf-parse": "^2.4.5"
-    },
-    "devDependencies": {
-        "@eslint/js": "^9.38.0",
-        "@eslint/json": "^0.13.2",
-        "eslint": "^9.38.0",
-        "eslint-config-google": "^0.14.0",
-        "globals": "^16.4.0",
-        "jest": "^30.2.0"
-    },
-    "scripts": {
-        "start": "functions-framework --target=gmailPubSubHandler",
-        "lint": "eslint .",
-        "test": "node --experimental-vm-modules node_modules/jest/bin/jest.js",
-        "test:connectivity": "node connectivity-check.js"
-    }
+  "type": "module",
+  "engines": {
+    "node": ">=22"
+  },
+  "dependencies": {
+    "@google-cloud/firestore": "^7.8.0",
+    "@google-cloud/functions-framework": "^4.0.0",
+    "dotenv": "^17.2.3",
+    "googleapis": "^164.1.0",
+    "pdf-parse": "^2.4.5"
+  },
+  "devDependencies": {
+    "@eslint/js": "^9.38.0",
+    "@eslint/json": "^0.13.2",
+    "eslint": "^9.38.0",
+    "eslint-config-google": "^0.14.0",
+    "eslint-config-prettier": "^10.1.8",
+    "globals": "^16.4.0",
+    "jest": "^30.2.0",
+    "prettier": "^3.7.4"
+  },
+  "scripts": {
+    "start": "functions-framework --target=gmailPubSubHandler",
+    "lint": "eslint .",
+    "lint:fix": "eslint . --fix",
+    "format": "prettier --write .",
+    "format:check": "prettier --check .",
+    "fix": "npm run format && npm run lint:fix",
+    "validate": "npm run format:check && npm run lint && npm run test",
+    "validate:fix": "npm run fix && npm run test",
+    "test": "node --experimental-vm-modules node_modules/jest/bin/jest.js",
+    "test:connectivity": "node connectivity-check.js"
+  }
 }
