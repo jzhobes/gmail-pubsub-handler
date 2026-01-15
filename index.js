@@ -134,7 +134,7 @@ export class TransactionAutomationService {
 
         // Persist the latest historyId
         await docRef.set({ lastHistoryId: newHistoryId }, { merge: true });
-        console.log(`✅ Updated Firestore lastHistoryId → ${newHistoryId}`);
+        console.log(`[ACTION] ✅ Updated Firestore lastHistoryId → ${newHistoryId}`);
       } catch (apiErr) {
         if (apiErr?.response?.status === 400) {
           console.warn(
@@ -147,7 +147,7 @@ export class TransactionAutomationService {
               { lastHistoryId: resetHistoryId },
               { merge: true }
             );
-            console.log(`✅ Baseline reset → ${resetHistoryId}`);
+            console.log(`[ACTION] ✅ Baseline reset → ${resetHistoryId}`);
           } catch (resetErr) {
             console.error(`❌ Failed to reset baseline: ${resetErr.message}`);
           }
@@ -463,7 +463,7 @@ export class TransactionAutomationService {
           fileId: fileId,
         });
         console.log(
-          `☁️ Overwrote existing "${fileData.fileName}" in Drive (ID: ${file.data.id})`
+          `[ACTION] ☁️ Overwrote existing "${fileData.fileName}" in Drive (ID: ${file.data.id})`
         );
       } else {
         // Create new file
@@ -475,7 +475,7 @@ export class TransactionAutomationService {
           },
         });
         console.log(
-          `☁️ Uploaded new "${fileData.fileName}" to Drive (ID: ${file.data.id})`
+          `[ACTION] ☁️ Uploaded new "${fileData.fileName}" to Drive (ID: ${file.data.id})`
         );
       }
     } catch (error) {
@@ -515,7 +515,7 @@ export class TransactionAutomationService {
         fields: 'id',
       });
 
-      console.log(`wd Created folder "${name}" (ID: ${file.data.id})`);
+      console.log(`[ACTION] 📁 Created folder "${name}" (ID: ${file.data.id})`);
       return file.data.id;
     } catch (error) {
       console.error(
@@ -538,7 +538,7 @@ export class TransactionAutomationService {
         removeLabelIds: ['UNREAD'],
       },
     });
-    console.log(`📖 Marked email "${from}" and subject "${subject}" as read.`);
+    console.log(`[ACTION] 📖 Marked email "${from}" and subject "${subject}" as read.`);
   }
 
   /**
@@ -594,13 +594,13 @@ export class TransactionAutomationService {
           const eventDate =
             actualStart.date ||
             new Date(actualStart.dateTime).toISOString().split('T')[0];
-          console.log(`🗑 Deleting "${e.summary}" on ${eventDate}`);
+          console.log(`[ACTION] 🗑 Deleting "${e.summary}" on ${eventDate}`);
           await this.calendar.events.delete({
             calendarId: targetCal.id,
             eventId: e.id,
           });
         } else if (action === 'patch') {
-          console.log(`✏️ Updating "${e.summary}" → "${title}"`);
+          console.log(`[ACTION] ✏️ Updating "${e.summary}" → "${title}"`);
           await this.calendar.events.patch({
             calendarId: targetCal.id,
             eventId: e.id,
