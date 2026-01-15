@@ -134,7 +134,7 @@ export class TransactionAutomationService {
 
         // Persist the latest historyId
         await docRef.set({ lastHistoryId: newHistoryId }, { merge: true });
-        console.log(`[ACTION] ✅ Updated Firestore lastHistoryId → ${newHistoryId}`);
+        console.log(`✅ Updated Firestore lastHistoryId → ${newHistoryId}`);
       } catch (apiErr) {
         if (apiErr?.response?.status === 400) {
           console.warn(
@@ -147,7 +147,7 @@ export class TransactionAutomationService {
               { lastHistoryId: resetHistoryId },
               { merge: true }
             );
-            console.log(`[ACTION] ✅ Baseline reset → ${resetHistoryId}`);
+            console.log(`✅ Baseline reset → ${resetHistoryId}`);
           } catch (resetErr) {
             console.error(`❌ Failed to reset baseline: ${resetErr.message}`);
           }
