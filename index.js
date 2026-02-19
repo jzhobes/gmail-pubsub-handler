@@ -328,6 +328,9 @@ export class TransactionAutomationService {
           monthOffset: 0,
         });
         return true;
+      } else if (body.includes('comcast-xfinity has initiated')) {
+        // ✅ Comcast/Xfinity
+        return await this.checkComcastPayment(body);
       }
       return false;
     }
@@ -376,22 +379,7 @@ export class TransactionAutomationService {
       sender.includes('chase.com') &&
       subj.includes('transaction with comcast / xfinity')
     ) {
-      console.log(`🌐 Checking for Comcast/Xfinity payments: "${subject}"`);
-      const amountMatch = subject.match(/\$([\d,]+(?:\.\d{2})?)/);
-      if (!amountMatch) {
-        console.log(`No dollar amount found in "${subject}"`);
-        return false;
-      }
-      const amount = parseFloat(amountMatch[1].replace(/,/g, ''));
-      if (isNaN(amount) || amount < 100 || amount > 200) {
-        console.log(`Unexpected Comcast amount $${amount}, skipping.`);
-        return false;
-      }
-      await this.processCalendarEvents('Comcast / Xfinity Withdrawal', {
-        action: 'delete',
-        monthOffset: 0,
-      });
-      return true;
+      return await this.checkComcastPayment(subject);
     }
 
     // ✅ Eversource
@@ -420,6 +408,31 @@ export class TransactionAutomationService {
 
     console.log(`📖 Ignoring email from "${from}" and subject "${subject}"`);
     return false;
+  }
+
+  /**
+   * Helper to process Comcast payment detection logic.
+   *
+   * @param {string} text The text to search for the amount (body or subject).
+   * @returns {Promise<boolean>}
+   */
+  async checkComcastPayment(text) {
+    console.log(`🌐 Checking for Comcast/Xfinity payments: "${text}"`);
+    const amountMatch = text.match(/\$([\d,]+(?:\.\d{2})?)/);
+    if (!amountMatch) {
+      console.log(`No dollar amount found in "${text}"`);
+      return false;
+    }
+    const amount = parseFloat(amountMatch[1].replace(/,/g, ''));
+    if (isNaN(amount) || amount < 100 || amount > 200) {
+      console.log(`Unexpected Comcast amount $${amount}, skipping.`);
+      return false;
+    }
+    await this.processCalendarEvents('Comcast / Xfinity Withdrawal', {
+      action: 'delete',
+      monthOffset: 0,
+    });
+    return true;
   }
 
   /**

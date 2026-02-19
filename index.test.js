@@ -290,6 +290,84 @@ describe('Transaction Handler Logic', () => {
     });
   });
 
+  describe('Comcast', () => {
+    it('deletes "Comcast / Xfinity Withdrawal" event when detected in body', async () => {
+      mockCalendar.events.list.mockResolvedValue({
+        data: {
+          items: [
+            {
+              id: 'evt_comcast',
+              summary: 'Comcast / Xfinity Withdrawal',
+              start: { date: '2023-01-01' },
+            },
+          ],
+        },
+      });
+
+      const result = await service.handleTransaction({
+        from: 'capitalone@capitalone.com',
+        subject: 'Withdrawal Notice',
+        message: {
+          data: {
+            payload: {
+              mimeType: 'text/plain',
+              body: {
+                data: Buffer.from(
+                  'comcast-xfinity has initiated a withdrawal of $120.00'
+                ).toString('base64'),
+              },
+            },
+          },
+        },
+      });
+
+      expect(result).toBe(true);
+      expect(mockCalendar.events.delete).toHaveBeenCalledWith(
+        expect.objectContaining({
+          eventId: 'evt_comcast',
+        })
+      );
+    });
+
+    it('deletes "Comcast / Xfinity Withdrawal" event when detected in subject', async () => {
+      mockCalendar.events.list.mockResolvedValue({
+        data: {
+          items: [
+            {
+              id: 'evt_comcast',
+              summary: 'Comcast / Xfinity Withdrawal',
+              start: { date: '2023-01-01' },
+            },
+          ],
+        },
+      });
+
+      const result = await service.handleTransaction({
+        from: 'no-reply@alert.chase.com',
+        subject: 'Your transaction with comcast / xfinity of $120.00',
+        message: {},
+      });
+
+      expect(result).toBe(true);
+      expect(mockCalendar.events.delete).toHaveBeenCalledWith(
+        expect.objectContaining({
+          eventId: 'evt_comcast',
+        })
+      );
+    });
+
+    it('ignores invalid amounts', async () => {
+      const result = await service.handleTransaction({
+        from: 'no-reply@alert.chase.com',
+        subject: 'Your transaction with comcast / xfinity of $500.00',
+        message: {},
+      });
+
+      expect(result).toBe(false);
+      expect(mockCalendar.events.delete).not.toHaveBeenCalled();
+    });
+  });
+
   describe('Amex', () => {
     it('deletes "Pay Amex" event for next month', async () => {
       mockCalendar.events.list.mockImplementation(() =>
