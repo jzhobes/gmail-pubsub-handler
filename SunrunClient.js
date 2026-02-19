@@ -121,8 +121,8 @@ export default class SunrunClient {
 
       const pad = (n) => n.toString().padStart(2, '0');
       return `${year}-${pad(billEndMonth)}-${pad(billEndDay)}`;
-    } catch (error) {
-      console.error('Error parsing PDF:', error);
+    } catch (e) {
+      console.error('Error parsing PDF:', e);
       return null;
     } finally {
       if (parser) {

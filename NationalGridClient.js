@@ -128,9 +128,10 @@ export default class NationalGridClient {
       this.password = creds.password;
       this.accountNumber = creds.accountNumber;
       this.subscriptionKey = creds.subscriptionKey;
-    } catch (error) {
+    } catch (e) {
       throw new Error(
-        `❌ Failed to parse NATIONAL_GRID_CREDENTIALS: ${error.message}`
+        `❌ Failed to parse NATIONAL_GRID_CREDENTIALS: ${e.message}`,
+        { cause: e }
       );
     }
 

@@ -11,13 +11,12 @@ import { checkAndMarkMessageProcessed } from './deduplication.js';
 export class TransactionAutomationService {
   /**
    * @param {Object} [services] - Injected services for testing.
-   * @param {Object} [services.firestore]
-   * @param {Object} [services.gmail]
-   * @param {Object} [services.calendar]
-   * @param {Object} [services.drive]
-   * @param {Object} [services.drive]
-   * @param {Object} [services.nationalGrid]
-   * @param {Object} [services.sunrun]
+   * @param {Firestore} [services.firestore]
+   * @param {import('googleapis').gmail_v1.Gmail} [services.gmail]
+   * @param {import('googleapis').calendar_v3.Calendar} [services.calendar]
+   * @param {import('googleapis').drive_v3.Drive} [services.drive]
+   * @param {import('./NationalGridClient.js').default} [services.nationalGrid]
+   * @param {import('./SunrunClient.js').default} [services.sunrun]
    * @param {Object} [config] - Configuration overrides (default: process.env).
    */
   constructor(services = {}, config = process.env) {
@@ -157,6 +156,8 @@ export class TransactionAutomationService {
       }
     } catch (e) {
       console.error(`❌ Error processing Gmail Pub/Sub message: ${e.message}`);
+      // Re-throw error to trigger Pub/Sub retry
+      throw e;
     }
   }
 
@@ -167,26 +168,73 @@ export class TransactionAutomationService {
    * @returns {Promise<boolean>}
    */
   async processGmailHistory(startHistoryId) {
+    let pageToken = undefined;
+    let hasMore = true;
+    let totalMessages = 0;
+
+    while (hasMore) {
+      const pageResults = await this.processHistoryPage(
+        startHistoryId,
+        pageToken
+      );
+      const { processedCount, nextPageToken, historyFound } = pageResults;
+
+      if (!historyFound) {
+        if (!pageToken) {
+          // No history on first page
+          return false;
+        }
+        // No more history
+        break;
+      }
+
+      totalMessages += processedCount;
+      pageToken = nextPageToken;
+      hasMore = !!nextPageToken;
+    }
+
+    return totalMessages > 0;
+  }
+
+  /**
+   * Fetches and processes a single page of history items.
+   *
+   * @param {string} startHistoryId
+   * @param {string} [pageToken]
+   * @returns {Promise<{processedCount: number, nextPageToken: string|undefined, historyFound: boolean}>}
+   */
+  async processHistoryPage(startHistoryId, pageToken) {
     const res = await this.gmail.users.history.list({
       userId: 'me',
       startHistoryId,
+      pageToken,
     });
 
-    if (!res.data.history) {
-      return false;
+    const historyItems = res.data.history;
+    if (!historyItems?.length) {
+      return {
+        processedCount: 0,
+        nextPageToken: undefined,
+        historyFound: false,
+      };
     }
 
-    console.log(`📬 Gmail History fetched: ${res.data.history.length} items`);
+    console.log(
+      `📬 Gmail History fetched: ${historyItems.length} items (Page token: ${pageToken || 'start'})`
+    );
 
-    for (const { messagesAdded = [] } of res.data.history) {
+    let processedCount = 0;
+
+    for (const { messagesAdded = [] } of historyItems) {
       for (const { message } of messagesAdded) {
         try {
-          // Deduplicate based on message ID
-          const isNew = await checkAndMarkMessageProcessed(
-            this.firestore,
-            message.id
-          );
-          if (!isNew) {
+          // Critical! Do not immediately mark as processed. Check existence first.
+          // Only mark after successful processing to ensure no data loss on crash.
+          const docRef = this.firestore
+            .collection('processed_messages')
+            .doc(message.id);
+          const doc = await docRef.get();
+          if (doc.exists) {
             console.log(`⏭️ Skipping duplicate message: ${message.id}`);
             continue;
           }
@@ -214,6 +262,11 @@ export class TransactionAutomationService {
               messageId: message.id,
             });
           }
+
+          // Mark as processed regardless of whether we 'handled' it (e.g. ignored emails)
+          // This prevents re-fetching full message body for irrelevant emails.
+          await checkAndMarkMessageProcessed(this.firestore, message.id);
+          processedCount++;
         } catch (e) {
           if (e.code === 404) {
             console.warn(`👻 Skipping missing message: ${message.id}`);
@@ -222,12 +275,17 @@ export class TransactionAutomationService {
           console.error(
             `❌ Error processing message ${message.id}: ${e.message}`
           );
+          // Retry processing this message on next iteration.
           continue;
         }
       }
     }
 
-    return true;
+    return {
+      processedCount,
+      nextPageToken: res.data.nextPageToken,
+      historyFound: true,
+    };
   }
 
   /**
@@ -259,10 +317,8 @@ export class TransactionAutomationService {
         const billData = await this.nationalGrid.getCurrentBill();
         await this.uploadToDrive(billData, 'House/National Grid Bills');
         return true;
-      } catch (error) {
-        console.error(
-          `❌ Failed to process National Grid bill: ${error.message}`
-        );
+      } catch (e) {
+        console.error(`❌ Failed to process National Grid bill: ${e.message}`);
         return false;
       }
     }
@@ -290,8 +346,8 @@ export class TransactionAutomationService {
 
         await this.uploadToDrive(billData, 'House/Sunrun Bills');
         return true;
-      } catch (error) {
-        console.error(`❌ Failed to process Sunrun bill: ${error.message}`);
+      } catch (e) {
+        console.error(`❌ Failed to process Sunrun bill: ${e.message}`);
         return false;
       }
     }
@@ -491,9 +547,9 @@ export class TransactionAutomationService {
           `[ACTION] ☁️ Uploaded new "${fileData.fileName}" to Drive (ID: ${file.data.id})`
         );
       }
-    } catch (error) {
-      console.error(`❌ Drive upload failed: ${error.message}`);
-      throw error;
+    } catch (e) {
+      console.error(`❌ Drive upload failed: ${e.message}`);
+      throw e;
     }
   }
 
@@ -551,7 +607,9 @@ export class TransactionAutomationService {
         removeLabelIds: ['UNREAD'],
       },
     });
-    console.log(`[ACTION] 📖 Marked email "${from}" and subject "${subject}" as read.`);
+    console.log(
+      `[ACTION] 📖 Marked email "${from}" and subject "${subject}" as read.`
+    );
   }
 
   /**
