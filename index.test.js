@@ -6,6 +6,7 @@ const mockCalendar = {
   calendarList: { list: jest.fn() },
   events: { list: jest.fn(), delete: jest.fn(), patch: jest.fn() },
 };
+
 const mockDrive = {
   files: {
     list: jest.fn(),
@@ -13,10 +14,25 @@ const mockDrive = {
     update: jest.fn().mockResolvedValue({ data: { id: 'updated_file_id' } }),
   },
 };
+
 const mockGmail = {
   users: {
-    messages: { modify: jest.fn() },
+    messages: {
+      get: jest.fn(),
+      modify: jest.fn(),
+      list: jest.fn(),
+    },
+    history: { list: jest.fn() },
+    getProfile: jest.fn(),
   },
+};
+
+const mockFirestore = {
+  collection: jest.fn().mockReturnThis(),
+  doc: jest.fn().mockReturnThis(),
+  get: jest.fn(),
+  set: jest.fn(),
+  create: jest.fn(),
 };
 
 describe('Transaction Handler Logic', () => {
@@ -31,7 +47,7 @@ describe('Transaction Handler Logic', () => {
         calendar: mockCalendar,
         drive: mockDrive,
         gmail: mockGmail,
-        // firestore: mockFirestore // Add if needed
+        firestore: mockFirestore,
       },
       {
         CALENDAR_NAME: 'Test Calendar',
@@ -396,6 +412,361 @@ describe('Transaction Handler Logic', () => {
           eventId: 'evt_amex',
         })
       );
+    });
+  });
+
+  describe('Chase', () => {
+    it('deletes "Pay Chase" event for next month', async () => {
+      mockCalendar.events.list.mockResolvedValue({
+        data: {
+          items: [
+            {
+              id: 'evt_chase',
+              summary: 'Pay Chase',
+              start: { date: '2023-02-01' },
+            },
+          ],
+        },
+      });
+
+      const result = await service.handleTransaction({
+        from: 'no-reply@chase.com',
+        subject: 'Your credit card payment is scheduled',
+        message: {},
+      });
+
+      expect(result).toBe(true);
+      expect(mockCalendar.events.delete).toHaveBeenCalled();
+    });
+
+    it('deletes "Pay mortgage" event for next month', async () => {
+      mockCalendar.events.list.mockResolvedValue({
+        data: {
+          items: [
+            {
+              id: 'evt_mortgage',
+              summary: 'Pay mortgage',
+              start: { date: '2023-02-01' },
+            },
+          ],
+        },
+      });
+
+      const result = await service.handleTransaction({
+        from: 'no-reply@chase.com',
+        subject: 'You scheduled your mortgage payment',
+        message: {},
+      });
+
+      expect(result).toBe(true);
+      expect(mockCalendar.events.delete).toHaveBeenCalled();
+    });
+  });
+
+  describe('Eversource', () => {
+    it('patches "Pay Gas Bill" event with amount', async () => {
+      mockCalendar.events.list.mockResolvedValue({
+        data: {
+          items: [
+            {
+              id: 'evt_gas',
+              summary: 'Pay Gas Bill',
+              start: { date: '2023-01-15' },
+            },
+          ],
+        },
+      });
+
+      const result = await service.handleTransaction({
+        from: 'no-reply@chase.com',
+        subject: 'Your transaction with spi*eversource for $123.45',
+        message: {},
+      });
+
+      expect(result).toBe(true);
+      expect(mockCalendar.events.patch).toHaveBeenCalledWith(
+        expect.objectContaining({
+          eventId: 'evt_gas',
+          requestBody: { summary: 'Gas Bill - $123.45' },
+        })
+      );
+    });
+
+    it('ignores Eversource if no amount found', async () => {
+      const result = await service.handleTransaction({
+        from: 'no-reply@chase.com',
+        subject: 'Your transaction with spi*eversource',
+        message: {},
+      });
+
+      expect(result).toBe(false);
+    });
+  });
+
+  describe('General Handling', () => {
+    it('ignores unrelated emails', async () => {
+      const result = await service.handleTransaction({
+        from: 'spam@spam.com',
+        subject: 'Enlarge your code coverage',
+        message: {},
+      });
+
+      expect(result).toBe(false);
+    });
+
+    it('marks message as read', async () => {
+      await service.markMessageAsRead({
+        from: 'test@test.com',
+        subject: 'test',
+        messageId: 'msg_123',
+      });
+
+      expect(mockGmail.users.messages.modify).toHaveBeenCalledWith(
+        expect.objectContaining({
+          id: 'msg_123',
+          requestBody: { removeLabelIds: ['UNREAD'] },
+        })
+      );
+    });
+  });
+
+  describe('handleEvent (Pub/Sub entry point)', () => {
+    it('skips if no message data', async () => {
+      await service.handleEvent({ data: {} });
+      expect(mockFirestore.collection).not.toHaveBeenCalled();
+    });
+
+    it('processes new history successfully', async () => {
+      const event = {
+        data: {
+          message: {
+            data: Buffer.from(
+              JSON.stringify({
+                emailAddress: 'me@example.com',
+                historyId: 1000,
+              })
+            ).toString('base64'),
+          },
+        },
+      };
+
+      // Setup Firestore mocks
+      // 1. lastHistoryId check (handleEvent line 109)
+      mockFirestore.get.mockResolvedValueOnce({
+        exists: true,
+        data: () => ({ lastHistoryId: 900 }),
+      });
+      // 2. duplicate message check (processHistoryPage line 236)
+      mockFirestore.get.mockResolvedValueOnce({
+        exists: false,
+      });
+
+      // Gmail history mock
+      mockGmail.users.history.list.mockResolvedValue({
+        data: {
+          history: [
+            {
+              messagesAdded: [{ message: { id: 'new_msg_1' } }],
+            },
+          ],
+        },
+      });
+
+      mockGmail.users.messages.get.mockResolvedValue({
+        data: {
+          payload: {
+            headers: [
+              { name: 'Subject', value: 'Test Subject' },
+              { name: 'From', value: 'test@test.com' },
+            ],
+          },
+        },
+      });
+
+      await service.handleEvent(event);
+
+      expect(mockGmail.users.history.list).toHaveBeenCalled();
+      expect(mockFirestore.set).toHaveBeenCalledWith(
+        expect.objectContaining({ lastHistoryId: 1000 }),
+        expect.objectContaining({ merge: true })
+      );
+    });
+
+    it('resets baseline on Gmail API 400 error', async () => {
+      const event = {
+        data: {
+          message: {
+            data: Buffer.from(
+              JSON.stringify({
+                emailAddress: 'me@example.com',
+                historyId: 1000,
+              })
+            ).toString('base64'),
+          },
+        },
+      };
+
+      // lastHistoryId check
+      mockFirestore.get.mockResolvedValueOnce({
+        exists: true,
+        data: () => ({ lastHistoryId: 900 }),
+      });
+
+      // Gmail history list fails with 400 (expired historyId)
+      const error = new Error('Invalid historyId');
+      error.response = { status: 400 };
+      mockGmail.users.history.list.mockRejectedValue(error);
+
+      // getProfile and baseline reset
+      mockGmail.users.getProfile.mockResolvedValue({
+        data: { historyId: 2000 },
+      });
+
+      await service.handleEvent(event);
+
+      expect(mockGmail.users.getProfile).toHaveBeenCalled();
+      expect(mockFirestore.set).toHaveBeenCalledWith(
+        expect.objectContaining({ lastHistoryId: 2000 }),
+        expect.objectContaining({ merge: true })
+      );
+    });
+  });
+
+  describe('Drive file management', () => {
+    it('updates existing file in Drive', async () => {
+      const fileData = {
+        buffer: Buffer.from('new-data'),
+        fileName: 'test.pdf',
+      };
+      const folderPath = 'House/Bills';
+
+      // 1. House folder check
+      mockDrive.files.list
+        .mockResolvedValueOnce({ data: { files: [{ id: 'f1' }] } })
+        // 2. Bills folder check
+        .mockResolvedValueOnce({ data: { files: [{ id: 'f2' }] } })
+        // 3. File existence check (found)
+        .mockResolvedValueOnce({ data: { files: [{ id: 'file_789' }] } });
+
+      await service.uploadToDrive(fileData, folderPath);
+
+      expect(mockDrive.files.update).toHaveBeenCalledWith(
+        expect.objectContaining({ fileId: 'file_789' })
+      );
+      expect(mockDrive.files.create).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('Email extraction', () => {
+    it('skips missing message with 404', async () => {
+      // Mock history found one message
+      mockGmail.users.history.list.mockResolvedValue({
+        data: {
+          history: [{ messagesAdded: [{ message: { id: 'missing_1' } }] }],
+        },
+      });
+      // Mock deduplication check
+      mockFirestore.get.mockResolvedValueOnce({ exists: false });
+      // Mock get message details fails with 404
+      const error = new Error('Not Found');
+      error.code = 404;
+      mockGmail.users.messages.get.mockRejectedValue(error);
+
+      // processHistoryPage should skip it and not crash
+      const results = await service.processHistoryPage('900');
+      expect(results.processedCount).toBe(0);
+    });
+
+    it('extracts body from multipart email', async () => {
+      const message = {
+        data: {
+          payload: {
+            mimeType: 'multipart/alternative',
+            parts: [
+              {
+                mimeType: 'text/html',
+                body: {
+                  data: Buffer.from('<html>Body</html>').toString('base64'),
+                },
+              },
+            ],
+          },
+        },
+      };
+
+      const result = await service.handleTransaction({
+        from: 'capitalone@capitalone.com',
+        subject: 'Withdrawal Notice',
+        message: message,
+      });
+      // Should be false because 'att has initiated' etc is not in the html body
+      expect(result).toBe(false);
+    });
+  });
+
+  describe('Error Handling', () => {
+    it('handles Drive upload failure', async () => {
+      mockDrive.files.list.mockRejectedValue(new Error('Drive error'));
+
+      await expect(
+        service.uploadToDrive(
+          { buffer: Buffer.from(''), fileName: 't.pdf' },
+          'H/B'
+        )
+      ).rejects.toThrow('Drive error');
+    });
+
+    it('handles Calendar API error gracefully', async () => {
+      mockCalendar.calendarList.list.mockRejectedValue(new Error('Cal error'));
+
+      const result = await service.processCalendarEvents('Test', {
+        action: 'delete',
+      });
+      expect(result).toBe(false);
+    });
+
+    it('handles missing calendar', async () => {
+      mockCalendar.calendarList.list.mockResolvedValue({ data: { items: [] } });
+      const result = await service.processCalendarEvents('Test', {
+        action: 'delete',
+      });
+      expect(result).toBe(false);
+    });
+
+    it('handles no events found', async () => {
+      mockCalendar.events.list.mockResolvedValue({ data: { items: [] } });
+      const result = await service.processCalendarEvents('Test', {
+        action: 'delete',
+      });
+      expect(result).toBe(false);
+    });
+
+    it('handles unknown action', async () => {
+      mockCalendar.events.list.mockResolvedValue({
+        data: {
+          items: [{ id: 'e1', summary: 'Test', start: { date: '2023-01-01' } }],
+        },
+      });
+      const result = await service.processCalendarEvents('Test', {
+        action: 'unknown',
+      });
+      expect(result).toBe(true);
+    });
+
+    it('handles folder creation failure', async () => {
+      // First folder 'House' not found
+      mockDrive.files.list.mockResolvedValueOnce({ data: { files: [] } });
+      // Create folder 'House' fails
+      mockDrive.files.create.mockRejectedValue(
+        new Error('Folder create error')
+      );
+
+      await expect(
+        service.uploadToDrive(
+          { buffer: Buffer.from(''), fileName: 't.pdf' },
+          'House/B'
+        )
+      ).rejects.toThrow('Folder create error');
     });
   });
 });

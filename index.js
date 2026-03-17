@@ -4,6 +4,7 @@ import { Firestore } from '@google-cloud/firestore';
 import { google } from 'googleapis';
 import { Readable } from 'stream';
 import { checkAndMarkMessageProcessed } from './deduplication.js';
+import { logger } from './logger.js';
 
 /**
  * Core processor for handling Gmail Pub/Sub events and executing financial transactions.
@@ -90,14 +91,14 @@ export class TransactionAutomationService {
     try {
       const message = cloudEvent.data?.message;
       if (!message?.data) {
-        console.warn('⚠️ No message data found.');
+        logger.warn('⚠️ No message data found.');
         return;
       }
 
       // Decode Base64 → JSON
       const dataStr = Buffer.from(message.data, 'base64').toString('utf8');
       const payload = JSON.parse(dataStr);
-      console.log(`📩 Gmail Push payload: ${JSON.stringify(payload)}`);
+      logger.log(`📩 Gmail Push payload: ${JSON.stringify(payload)}`);
 
       const email = payload.emailAddress || 'me';
       const newHistoryId = payload.historyId;
@@ -113,7 +114,7 @@ export class TransactionAutomationService {
 
       // Skip if this historyId is not newer than what we've already processed
       if (lastHistoryId && newHistoryId <= lastHistoryId) {
-        console.log(
+        logger.log(
           `⏭️ Skipping ${newHistoryId < lastHistoryId ? 'old' : 'duplicate'} historyId: ${newHistoryId} (last: ${lastHistoryId})`
         );
         return;
@@ -122,21 +123,21 @@ export class TransactionAutomationService {
       // Decide which historyId to start from
       const startId = lastHistoryId || newHistoryId;
 
-      console.log(`🔍 Fetching Gmail history since ${startId}`);
+      logger.log(`🔍 Fetching Gmail history since ${startId}`);
 
       try {
         const success = await this.processGmailHistory(startId);
         if (!success) {
-          console.log('📬 Gmail History: No changes since last check');
+          logger.log('📬 Gmail History: No changes since last check');
           return;
         }
 
         // Persist the latest historyId
         await docRef.set({ lastHistoryId: newHistoryId }, { merge: true });
-        console.log(`✅ Updated Firestore lastHistoryId → ${newHistoryId}`);
+        logger.log(`✅ Updated Firestore lastHistoryId → ${newHistoryId}`);
       } catch (apiErr) {
         if (apiErr?.response?.status === 400) {
-          console.warn(
+          logger.warn(
             `⚠️ Invalid historyId detected. Resetting baseline. Error: ${apiErr.message}`
           );
           try {
@@ -146,16 +147,16 @@ export class TransactionAutomationService {
               { lastHistoryId: resetHistoryId },
               { merge: true }
             );
-            console.log(`✅ Baseline reset → ${resetHistoryId}`);
+            logger.log(`✅ Baseline reset → ${resetHistoryId}`);
           } catch (resetErr) {
-            console.error(`❌ Failed to reset baseline: ${resetErr.message}`);
+            logger.error(`❌ Failed to reset baseline: ${resetErr.message}`);
           }
         } else {
-          console.error(`❌ Gmail API error: ${apiErr.message}`);
+          logger.error(`❌ Gmail API error: ${apiErr.message}`);
         }
       }
     } catch (e) {
-      console.error(`❌ Error processing Gmail Pub/Sub message: ${e.message}`);
+      logger.error(`❌ Error processing Gmail Pub/Sub message: ${e.message}`);
       // Re-throw error to trigger Pub/Sub retry
       throw e;
     }
@@ -219,7 +220,7 @@ export class TransactionAutomationService {
       };
     }
 
-    console.log(
+    logger.log(
       `📬 Gmail History fetched: ${historyItems.length} items (Page token: ${pageToken || 'start'})`
     );
 
@@ -235,7 +236,7 @@ export class TransactionAutomationService {
             .doc(message.id);
           const doc = await docRef.get();
           if (doc.exists) {
-            console.log(`⏭️ Skipping duplicate message: ${message.id}`);
+            logger.log(`⏭️ Skipping duplicate message: ${message.id}`);
             continue;
           }
 
@@ -269,10 +270,10 @@ export class TransactionAutomationService {
           processedCount++;
         } catch (e) {
           if (e.code === 404) {
-            console.warn(`👻 Skipping missing message: ${message.id}`);
+            logger.warn(`👻 Skipping missing message: ${message.id}`);
             continue;
           }
-          console.error(
+          logger.error(
             `❌ Error processing message ${message.id}: ${e.message}`
           );
           // Retry processing this message on next iteration.
@@ -306,7 +307,7 @@ export class TransactionAutomationService {
         /from:.*nationalgridus\.com/.test(body)) &&
       subj.includes('national grid bill')
     ) {
-      console.log(`⚡ Checking National Grid bill for "${subject}"`);
+      logger.log(`⚡ Checking National Grid bill for "${subject}"`);
       try {
         if (!this.nationalGrid) {
           const { default: NationalGridClient } =
@@ -318,7 +319,7 @@ export class TransactionAutomationService {
         await this.uploadToDrive(billData, 'House/National Grid Bills');
         return true;
       } catch (e) {
-        console.error(`❌ Failed to process National Grid bill: ${e.message}`);
+        logger.error(`❌ Failed to process National Grid bill: ${e.message}`);
         return false;
       }
     }
@@ -329,7 +330,7 @@ export class TransactionAutomationService {
       (sender.includes('sunrun.com') || /from:.*sunrun\.com/.test(body)) &&
       subj.includes('sunrun bill')
     ) {
-      console.log(`☀️ Checking Sunrun bill for "${subject}"`);
+      logger.log(`☀️ Checking Sunrun bill for "${subject}"`);
       try {
         if (!this.sunrun) {
           const { default: SunrunClient } = await import('./SunrunClient.js');
@@ -347,7 +348,7 @@ export class TransactionAutomationService {
         await this.uploadToDrive(billData, 'House/Sunrun Bills');
         return true;
       } catch (e) {
-        console.error(`❌ Failed to process Sunrun bill: ${e.message}`);
+        logger.error(`❌ Failed to process Sunrun bill: ${e.message}`);
         return false;
       }
     }
@@ -357,7 +358,7 @@ export class TransactionAutomationService {
       sender.includes('capitalone.com') &&
       subj.includes('withdrawal notice')
     ) {
-      console.log(`🏦 Checking Capital One withdrawal notice for "${subject}"`);
+      logger.log(`🏦 Checking Capital One withdrawal notice for "${subject}"`);
       const body = extractEmailBody(message).toLowerCase();
 
       if (body.includes('att has initiated')) {
@@ -396,7 +397,7 @@ export class TransactionAutomationService {
       sender.includes('americanexpress.com') &&
       subj.includes('received your payment')
     ) {
-      console.log(`💳 Checking for Amex card payments for "${subject}"`);
+      logger.log(`💳 Checking for Amex card payments for "${subject}"`);
       await this.processCalendarEvents('Pay Amex', {
         action: 'delete',
         monthOffset: 1,
@@ -409,7 +410,7 @@ export class TransactionAutomationService {
       sender.includes('chase.com') &&
       subj.includes('your credit card payment is scheduled')
     ) {
-      console.log(`🔍 Checking for Chase card payments for "${subject}"`);
+      logger.log(`🔍 Checking for Chase card payments for "${subject}"`);
       await this.processCalendarEvents('Pay Chase', {
         action: 'delete',
         monthOffset: 1,
@@ -422,7 +423,7 @@ export class TransactionAutomationService {
       sender.includes('chase.com') &&
       subj.includes('you scheduled your mortgage payment')
     ) {
-      console.log(`🏠 Checking for Chase mortgage payments: "${subject}"`);
+      logger.log(`🏠 Checking for Chase mortgage payments: "${subject}"`);
       await this.processCalendarEvents('Pay mortgage', {
         action: 'delete',
         monthOffset: 1,
@@ -443,15 +444,15 @@ export class TransactionAutomationService {
       sender.includes('chase.com') &&
       subj.includes('transaction with spi*eversource')
     ) {
-      console.log(`🔌 Checking for Eversource/Speedpay payments: "${subject}"`);
+      logger.log(`🔌 Checking for Eversource/Speedpay payments: "${subject}"`);
       const amountMatch = subject.match(/\$([\d,]+(?:\.\d{2})?)/);
       if (!amountMatch) {
-        console.log(`No dollar amount found in "${subject}"`);
+        logger.log(`No dollar amount found in "${subject}"`);
         return false;
       }
       const amount = parseFloat(amountMatch[1].replace(/,/g, ''));
       if (isNaN(amount)) {
-        console.log(`Invalid Eversource amount in "${subject}"`);
+        logger.log(`Invalid Eversource amount in "${subject}"`);
         return false;
       }
       await this.processCalendarEvents('Pay Gas Bill', {
@@ -462,7 +463,7 @@ export class TransactionAutomationService {
       return true;
     }
 
-    console.log(`📖 Ignoring email from "${from}" and subject "${subject}"`);
+    logger.log(`📖 Ignoring email from "${from}" and subject "${subject}"`);
     return false;
   }
 
@@ -473,15 +474,15 @@ export class TransactionAutomationService {
    * @returns {Promise<boolean>}
    */
   async checkComcastPayment(text) {
-    console.log(`🌐 Checking for Comcast/Xfinity payments: "${text}"`);
+    logger.log(`🌐 Checking for Comcast/Xfinity payments: "${text}"`);
     const amountMatch = text.match(/\$([\d,]+(?:\.\d{2})?)/);
     if (!amountMatch) {
-      console.log(`No dollar amount found in "${text}"`);
+      logger.log(`No dollar amount found in "${text}"`);
       return false;
     }
     const amount = parseFloat(amountMatch[1].replace(/,/g, ''));
     if (isNaN(amount) || amount < 100 || amount > 200) {
-      console.log(`Unexpected Comcast amount $${amount}, skipping.`);
+      logger.log(`Unexpected Comcast amount $${amount}, skipping.`);
       return false;
     }
     await this.processCalendarEvents('Comcast / Xfinity Withdrawal', {
@@ -531,7 +532,7 @@ export class TransactionAutomationService {
           ...commonParams,
           fileId: fileId,
         });
-        console.log(
+        logger.log(
           `[ACTION] ☁️ Overwrote existing "${fileData.fileName}" in Drive (ID: ${file.data.id})`
         );
       } else {
@@ -543,12 +544,12 @@ export class TransactionAutomationService {
             parents: [parentId],
           },
         });
-        console.log(
+        logger.log(
           `[ACTION] ☁️ Uploaded new "${fileData.fileName}" to Drive (ID: ${file.data.id})`
         );
       }
     } catch (e) {
-      console.error(`❌ Drive upload failed: ${e.message}`);
+      logger.error(`❌ Drive upload failed: ${e.message}`);
       throw e;
     }
   }
@@ -584,10 +585,10 @@ export class TransactionAutomationService {
         fields: 'id',
       });
 
-      console.log(`[ACTION] 📁 Created folder "${name}" (ID: ${file.data.id})`);
+      logger.log(`[ACTION] 📁 Created folder "${name}" (ID: ${file.data.id})`);
       return file.data.id;
     } catch (error) {
-      console.error(
+      logger.error(
         `❌ Error finding/creating folder "${name}": ${error.message}`
       );
       throw error;
@@ -607,7 +608,7 @@ export class TransactionAutomationService {
         removeLabelIds: ['UNREAD'],
       },
     });
-    console.log(
+    logger.log(
       `[ACTION] 📖 Marked email "${from}" and subject "${subject}" as read.`
     );
   }
@@ -640,7 +641,7 @@ export class TransactionAutomationService {
         (c) => c.summary === this.calendarName
       );
       if (!targetCal) {
-        console.log(`No calendar named "${this.calendarName}".`);
+        logger.log(`No calendar named "${this.calendarName}".`);
         return false;
       }
 
@@ -655,7 +656,7 @@ export class TransactionAutomationService {
         e.summary.startsWith(eventPrefix)
       );
       if (!events.length) {
-        console.log(`No "${eventPrefix}" reminders this month.`);
+        logger.log(`No "${eventPrefix}" reminders this month.`);
         return false;
       }
 
@@ -665,25 +666,25 @@ export class TransactionAutomationService {
           const eventDate =
             actualStart.date ||
             new Date(actualStart.dateTime).toISOString().split('T')[0];
-          console.log(`[ACTION] 🗑 Deleting "${e.summary}" on ${eventDate}`);
+          logger.log(`[ACTION] 🗑 Deleting "${e.summary}" on ${eventDate}`);
           await this.calendar.events.delete({
             calendarId: targetCal.id,
             eventId: e.id,
           });
         } else if (action === 'patch') {
-          console.log(`[ACTION] ✏️ Updating "${e.summary}" → "${title}"`);
+          logger.log(`[ACTION] ✏️ Updating "${e.summary}" → "${title}"`);
           await this.calendar.events.patch({
             calendarId: targetCal.id,
             eventId: e.id,
             requestBody: { summary: title },
           });
         } else {
-          console.log(`⁉️ Unknown action "${action}"`);
+          logger.log(`⁉️ Unknown action "${action}"`);
         }
       }
       return true;
     } catch (calErr) {
-      console.error(`❌ Calendar API error: ${calErr.message}`);
+      logger.error(`❌ Calendar API error: ${calErr.message}`);
       return false;
     }
   }

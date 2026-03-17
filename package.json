@@ -12,12 +12,12 @@
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",
-    "@eslint/json": "^1.0.1",
-    "eslint": "^10.0.0",
+    "@eslint/json": "^1.1.0",
+    "eslint": "^10.0.3",
     "eslint-config-google": "^0.14.0",
     "eslint-config-prettier": "^10.1.8",
-    "globals": "^17.3.0",
-    "jest": "^30.2.0",
+    "globals": "^17.4.0",
+    "jest": "^30.3.0",
     "prettier": "^3.8.1"
   },
   "overrides": {
@@ -33,6 +33,7 @@
     "validate": "npm run format:check && npm run lint && npm run test",
     "validate:fix": "npm run fix && npm run test",
     "test": "node --experimental-vm-modules node_modules/jest/bin/jest.js",
+    "test:coverage": "node --experimental-vm-modules node_modules/jest/bin/jest.js --coverage",
     "test:connectivity": "node connectivity-check.js"
   }
 }
