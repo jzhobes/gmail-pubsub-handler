@@ -556,10 +556,8 @@ describe('Transaction Handler Logic', () => {
         exists: true,
         data: () => ({ lastHistoryId: 900 }),
       });
-      // 2. duplicate message check (processHistoryPage line 236)
-      mockFirestore.get.mockResolvedValueOnce({
-        exists: false,
-      });
+      // 2. atomic lock check (processHistoryPage now uses create())
+      mockFirestore.create.mockResolvedValueOnce();
 
       // Gmail history mock
       mockGmail.users.history.list.mockResolvedValue({
@@ -586,6 +584,7 @@ describe('Transaction Handler Logic', () => {
       await service.handleEvent(event);
 
       expect(mockGmail.users.history.list).toHaveBeenCalled();
+      expect(mockFirestore.create).toHaveBeenCalled();
       expect(mockFirestore.set).toHaveBeenCalledWith(
         expect.objectContaining({ lastHistoryId: 1000 }),
         expect.objectContaining({ merge: true })
@@ -665,8 +664,8 @@ describe('Transaction Handler Logic', () => {
           history: [{ messagesAdded: [{ message: { id: 'missing_1' } }] }],
         },
       });
-      // Mock deduplication check
-      mockFirestore.get.mockResolvedValueOnce({ exists: false });
+      // Mock deduplication check (using atomic create now)
+      mockFirestore.create.mockResolvedValueOnce();
       // Mock get message details fails with 404
       const error = new Error('Not Found');
       error.code = 404;

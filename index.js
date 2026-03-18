@@ -229,14 +229,15 @@ export class TransactionAutomationService {
     for (const { messagesAdded = [] } of historyItems) {
       for (const { message } of messagesAdded) {
         try {
-          // Critical! Do not immediately mark as processed. Check existence first.
-          // Only mark after successful processing to ensure no data loss on crash.
-          const docRef = this.firestore
-            .collection('processed_messages')
-            .doc(message.id);
-          const doc = await docRef.get();
-          if (doc.exists) {
-            logger.log(`⏭️ Skipping duplicate message: ${message.id}`);
+          // Atomic deduplication: mark as processed BEFORE taking any action.
+          // This prevents race conditions if multiple pub/sub notifications arrive at once.
+          const isNewMessage = await checkAndMarkMessageProcessed(
+            this.firestore,
+            message.id
+          );
+
+          if (!isNewMessage) {
+            logger.log(`⏭️ Skipping already processed message: ${message.id}`);
             continue;
           }
 
@@ -264,9 +265,6 @@ export class TransactionAutomationService {
             });
           }
 
-          // Mark as processed regardless of whether we 'handled' it (e.g. ignored emails)
-          // This prevents re-fetching full message body for irrelevant emails.
-          await checkAndMarkMessageProcessed(this.firestore, message.id);
           processedCount++;
         } catch (e) {
           if (e.code === 404) {
