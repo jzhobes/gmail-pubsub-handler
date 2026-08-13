@@ -429,6 +429,24 @@ export class TransactionAutomationService {
       return true;
     }
 
+    // ✅ Chase checking transfer alert
+    if (
+      sender.includes('chase.com') &&
+      subj.startsWith('you sent $') &&
+      subj.includes(' from account ending in')
+    ) {
+      logger.log(`🏦 Checking Chase transfer alert: "${subject}"`);
+
+      if (/\blowes\b/.test(body)) {
+        await this.processCalendarEvents('Pay Lowes', {
+          action: 'delete',
+          monthOffset: 0,
+        });
+        return true;
+      }
+      return false;
+    }
+
     // ✅ Comcast/Xfinity
     if (
       sender.includes('chase.com') &&

@@ -384,6 +384,67 @@ describe('Transaction Handler Logic', () => {
     });
   });
 
+  describe('Chase checking transfer alert', () => {
+    it('deletes the current-month "Pay Lowes" event', async () => {
+      mockCalendar.events.list.mockResolvedValue({
+        data: {
+          items: [
+            {
+              id: 'evt_lowes',
+              summary: 'Pay Lowes',
+              start: { date: '2023-01-01' },
+            },
+          ],
+        },
+      });
+
+      const result = await service.handleTransaction({
+        from: 'Chase <no.reply.alerts@chase.com>',
+        subject: 'You sent $500.00 from account ending in (...8354)',
+        message: {
+          data: {
+            payload: {
+              mimeType: 'text/html',
+              body: {
+                data: Buffer.from(
+                  '<p>You sent $500.00 to <strong>LOWES</strong></p>'
+                ).toString('base64'),
+              },
+            },
+          },
+        },
+      });
+
+      expect(result).toBe(true);
+      expect(mockCalendar.events.delete).toHaveBeenCalledWith({
+        calendarId: 'cal_123',
+        eventId: 'evt_lowes',
+      });
+    });
+
+    it('ignores an unknown transfer recipient', async () => {
+      const result = await service.handleTransaction({
+        from: 'Chase <no.reply.alerts@chase.com>',
+        subject: 'You sent $100.00 from account ending in (...8354)',
+        message: {
+          data: {
+            payload: {
+              mimeType: 'text/plain',
+              body: {
+                data: Buffer.from('You sent $100.00 to SOMEONE').toString(
+                  'base64'
+                ),
+              },
+            },
+          },
+        },
+      });
+
+      expect(result).toBe(false);
+      expect(mockCalendar.events.delete).not.toHaveBeenCalled();
+    });
+  });
+
   describe('Amex', () => {
     it('deletes "Pay Amex" event for next month', async () => {
       mockCalendar.events.list.mockImplementation(() =>
