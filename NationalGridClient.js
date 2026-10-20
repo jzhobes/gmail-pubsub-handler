@@ -308,11 +308,13 @@ export default class NationalGridClient {
       `🔗 Redirect endpoint: ${redirectObj.origin}${redirectObj.pathname} (params: [${searchKeys.join(', ')}], hash: [${hashKeys.join(', ')}])`
     );
 
-    // Extract any OAuth errors returned by the identity provider
-    const oauthError = redirectObj.searchParams.get('error') || hashParams?.get('error');
-    const oauthDesc = redirectObj.searchParams.get('error_description') || hashParams?.get('error_description');
-    if (oauthError) {
-      console.error(`❌ National Grid OAuth error: ${oauthError}${oauthDesc ? ` - ${oauthDesc}` : ''}`);
+    // Extract any authentication error status returned by the identity provider
+    const failureReason = redirectObj.searchParams.get('error') || hashParams?.get('error');
+    const failureDetail = redirectObj.searchParams.get('error_description') || hashParams?.get('error_description');
+    if (failureReason) {
+      console.error(
+        `❌ National Grid authentication error: ${failureReason}${failureDetail ? ` - ${failureDetail}` : ''}`
+      );
     }
 
     // Extract Code
@@ -320,7 +322,7 @@ export default class NationalGridClient {
 
     if (!code) {
       throw new Error(
-        `❌ Authorization Code not found in redirect URL${oauthError ? ` (OAuth Error: ${oauthError} - ${oauthDesc || ''})` : ''}`
+        `❌ Authorization Code not found in redirect URL${failureReason ? ` (Reason: ${failureReason}${failureDetail ? ` - ${failureDetail}` : ''})` : ''}`
       );
     }
 
