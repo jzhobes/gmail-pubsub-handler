@@ -10,10 +10,7 @@ export default class SunrunClient {
    */
   async getBillFromMessage(message, gmailService) {
     // Extract PDF attachment
-    const pdfAttachment = await this.extractPdfAttachment(
-      message,
-      gmailService
-    );
+    const pdfAttachment = await this.extractPdfAttachment(message, gmailService);
     if (!pdfAttachment) {
       console.error('❌ No PDF attachment found in Sunrun email');
       return null;
@@ -22,9 +19,7 @@ export default class SunrunClient {
     // Extract date from PDF
     let dateStr;
     try {
-      const extractedDate = await this.extractBillDetailsFromPdf(
-        pdfAttachment.data
-      );
+      const extractedDate = await this.extractBillDetailsFromPdf(pdfAttachment.data);
       if (extractedDate) {
         dateStr = extractedDate;
         console.log(`📅 Extracted date from PDF: ${dateStr}`);
@@ -36,9 +31,7 @@ export default class SunrunClient {
     // Fallback to email date if extraction failed
     if (!dateStr) {
       console.warn('⚠️ Falling back to email date for Sunrun bill');
-      const dateHeader = message.data.payload.headers.find(
-        (h) => h.name === 'Date'
-      )?.value;
+      const dateHeader = message.data.payload.headers.find((h) => h.name === 'Date')?.value;
       const emailDate = dateHeader ? new Date(dateHeader) : new Date();
       dateStr = emailDate.toISOString().split('T')[0]; // yyyy-mm-dd
     }
@@ -107,8 +100,7 @@ export default class SunrunClient {
         }
       };
 
-      const { month: billEndMonth, day: billEndDay } =
-        parseDatePart(billingEndDateStr);
+      const { month: billEndMonth, day: billEndDay } = parseDatePart(billingEndDateStr);
       const [dueMonth, , dueYear] = dueDateStr.split('/').map(Number);
 
       let year = dueYear;

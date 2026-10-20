@@ -7,6 +7,194 @@ import { checkAndMarkMessageProcessed } from './deduplication.js';
 import { logger } from './logger.js';
 
 /**
+ * @typedef {Object} TransactionContext
+ * @property {string} from - Sender header string.
+ * @property {string} subject - Email subject line.
+ * @property {string} subj - Lowercased subject line.
+ * @property {string} body - Lowercased email body text.
+ * @property {Object} message - Gmail message object.
+ */
+
+/**
+ * @typedef {Object} TransactionRule
+ * @property {string} name - Human-readable name of the rule.
+ * @property {(context: TransactionContext) => boolean} matches - Determines if the rule applies to the email.
+ * @property {(context: TransactionContext, service: TransactionAutomationService) => Promise<boolean>} execute - Executes the transaction action.
+ */
+
+/**
+ * Default transaction routing rules.
+ * @type {Array<TransactionRule>}
+ */
+export const transactionRules = [
+  {
+    name: 'National Grid Bill',
+    matches: ({ from, subj, body }) =>
+      (isFromDomain(from, 'nationalgridus.com') || /from:.*@(?:[a-zA-Z0-9-]+\.)*nationalgridus\.com\b/i.test(body)) &&
+      subj.includes('national grid bill'),
+    execute: async ({ subject }, service) => {
+      logger.log(`⚡ Checking National Grid bill for "${subject}"`);
+      try {
+        if (!service.nationalGrid) {
+          const { default: NationalGridClient } = await import('./NationalGridClient.js');
+          service.nationalGrid = new NationalGridClient();
+        }
+
+        const billData = await service.nationalGrid.getCurrentBill();
+        await service.uploadToDrive(billData, 'House/National Grid Bills');
+        return true;
+      } catch (e) {
+        logger.error(`❌ Failed to process National Grid bill: ${e.message}`);
+        return false;
+      }
+    },
+  },
+  {
+    name: 'Sunrun Bill',
+    matches: ({ from, subj, body }) =>
+      (isFromDomain(from, 'sunrun.com') || /from:.*@(?:[a-zA-Z0-9-]+\.)*sunrun\.com\b/i.test(body)) &&
+      subj.includes('sunrun bill'),
+    execute: async ({ subject, message }, service) => {
+      logger.log(`☀️ Checking Sunrun bill for "${subject}"`);
+      try {
+        if (!service.sunrun) {
+          const { default: SunrunClient } = await import('./SunrunClient.js');
+          service.sunrun = new SunrunClient();
+        }
+
+        const billData = await service.sunrun.getBillFromMessage(message, service.gmail);
+        if (!billData) {
+          return false;
+        }
+
+        await service.uploadToDrive(billData, 'House/Sunrun Bills');
+        return true;
+      } catch (e) {
+        logger.error(`❌ Failed to process Sunrun bill: ${e.message}`);
+        return false;
+      }
+    },
+  },
+  {
+    name: 'Capital One Withdrawal Notice',
+    matches: ({ from, subj }) => isFromDomain(from, 'capitalone.com') && subj.includes('withdrawal notice'),
+    execute: async ({ subject, body }, service) => {
+      logger.log(`🏦 Checking Capital One withdrawal notice for "${subject}"`);
+
+      if (body.includes('att has initiated')) {
+        return await service.processCalendarEvents('Pay AT&T', {
+          action: 'delete',
+          monthOffset: 0,
+        });
+      } else if (body.includes('lowes has initiated')) {
+        return await service.processCalendarEvents('Pay Lowes', {
+          action: 'delete',
+          monthOffset: 0,
+        });
+      } else if (body.includes('eastern bank has initiated')) {
+        return await service.processCalendarEvents('Pay Eastern Savings', {
+          action: 'delete',
+          monthOffset: 0,
+        });
+      } else if (body.includes('sunrun has initiated')) {
+        return await service.processCalendarEvents('Sunrun withdrawal', {
+          action: 'delete',
+          monthOffset: 0,
+        });
+      } else if (body.includes('verizon has initiated')) {
+        return await service.processCalendarEvents('Verizon withdrawal', {
+          action: 'delete',
+          monthOffset: 0,
+        });
+      } else if (body.includes('comcast-xfinity has initiated')) {
+        return await service.checkComcastPayment(body);
+      }
+      return false;
+    },
+  },
+  {
+    name: 'Amex Card Payment',
+    matches: ({ from, subj }) => isFromDomain(from, 'americanexpress.com') && subj.includes('received your payment'),
+    execute: async ({ subject }, service) => {
+      logger.log(`💳 Checking for Amex card payments for "${subject}"`);
+      return await service.processCalendarEvents('Pay Amex', {
+        action: 'delete',
+        monthOffset: 1,
+      });
+    },
+  },
+  {
+    name: 'Chase Card Payment',
+    matches: ({ from, subj }) =>
+      isFromDomain(from, 'chase.com') && subj.includes('your credit card payment is scheduled'),
+    execute: async ({ subject }, service) => {
+      logger.log(`🔍 Checking for Chase card payments for "${subject}"`);
+      return await service.processCalendarEvents('Pay Chase', {
+        action: 'delete',
+        monthOffset: 1,
+      });
+    },
+  },
+  {
+    name: 'Chase Mortgage Payment',
+    matches: ({ from, subj }) =>
+      isFromDomain(from, 'chase.com') && subj.includes('you scheduled your mortgage payment'),
+    execute: async ({ subject }, service) => {
+      logger.log(`🏠 Checking for Chase mortgage payments: "${subject}"`);
+      return await service.processCalendarEvents('Pay mortgage', {
+        action: 'delete',
+        monthOffset: 1,
+      });
+    },
+  },
+  {
+    name: 'Chase Checking Transfer',
+    matches: ({ from, subj }) =>
+      isFromDomain(from, 'chase.com') && subj.startsWith('you sent $') && subj.includes(' from account ending in'),
+    execute: async ({ subject, body }, service) => {
+      logger.log(`🏦 Checking Chase transfer alert: "${subject}"`);
+
+      if (/\blowes\b/.test(body)) {
+        return await service.processCalendarEvents('Pay Lowes', {
+          action: 'delete',
+          monthOffset: 0,
+        });
+      }
+      return false;
+    },
+  },
+  {
+    name: 'Chase Comcast Payment',
+    matches: ({ from, subj }) => isFromDomain(from, 'chase.com') && subj.includes('transaction with comcast / xfinity'),
+    execute: async ({ subject }, service) => {
+      return await service.checkComcastPayment(subject);
+    },
+  },
+  {
+    name: 'Chase Eversource Payment',
+    matches: ({ from, subj }) => isFromDomain(from, 'chase.com') && subj.includes('transaction with spi*eversource'),
+    execute: async ({ subject }, service) => {
+      logger.log(`🔌 Checking for Eversource/Speedpay payments: "${subject}"`);
+      const amountMatch = subject.match(/\$([\d,]+(?:\.\d{2})?)/);
+      if (!amountMatch) {
+        logger.log(`No dollar amount found in "${subject}"`);
+        return false;
+      }
+      const amount = parseFloat(amountMatch[1].replace(/,/g, ''));
+      if (isNaN(amount)) {
+        logger.log(`Invalid Eversource amount in "${subject}"`);
+        return false;
+      }
+      return await service.processCalendarEvents('Pay Gas Bill', {
+        action: 'patch',
+        monthOffset: 0,
+        title: `Gas Bill - $${amount}`,
+      });
+    },
+  },
+];
+
+/**
  * Core processor for handling Gmail Pub/Sub events and executing financial transactions.
  */
 export class TransactionAutomationService {
@@ -18,6 +206,7 @@ export class TransactionAutomationService {
    * @param {import('googleapis').drive_v3.Drive} [services.drive]
    * @param {import('./NationalGridClient.js').default} [services.nationalGrid]
    * @param {import('./SunrunClient.js').default} [services.sunrun]
+   * @param {Array<Object>} [services.rules] - Optional custom transaction rules.
    * @param {Object} [config] - Configuration overrides (default: process.env).
    */
   constructor(services = {}, config = process.env) {
@@ -28,9 +217,9 @@ export class TransactionAutomationService {
     this.gmail = services.gmail;
     this.calendar = services.calendar;
     this.drive = services.drive;
-    this.drive = services.drive;
     this.nationalGrid = services.nationalGrid;
     this.sunrun = services.sunrun;
+    this.rules = services.rules || transactionRules;
 
     this.#initializeServices();
   }
@@ -41,19 +230,15 @@ export class TransactionAutomationService {
    * @private
    */
   #initializeServices() {
-    const { GMAIL_OAUTH_CREDENTIALS, FIRESTORE_COLLECTION, CALENDAR_NAME } =
-      this.config;
+    const { GMAIL_OAUTH_CREDENTIALS, FIRESTORE_COLLECTION, CALENDAR_NAME } = this.config;
 
     // Check if we have all required services
-    const hasAllServices =
-      this.firestore && this.gmail && this.calendar && this.drive;
+    const hasAllServices = this.firestore && this.gmail && this.calendar && this.drive;
 
     // If we are missing services, we need credentials to create them
     if (!hasAllServices) {
       if (!GMAIL_OAUTH_CREDENTIALS || !FIRESTORE_COLLECTION || !CALENDAR_NAME) {
-        throw new Error(
-          '❌ GMAIL_OAUTH_CREDENTIALS, FIRESTORE_COLLECTION, and CALENDAR_NAME env vars are required'
-        );
+        throw new Error('❌ GMAIL_OAUTH_CREDENTIALS, FIRESTORE_COLLECTION, and CALENDAR_NAME env vars are required');
       }
 
       // Initialize Firestore
@@ -63,9 +248,7 @@ export class TransactionAutomationService {
 
       // Initialize Google APIs
       if (!this.gmail || !this.calendar || !this.drive) {
-        const { client_id, client_secret, refresh_token } = JSON.parse(
-          GMAIL_OAUTH_CREDENTIALS
-        );
+        const { client_id, client_secret, refresh_token } = JSON.parse(GMAIL_OAUTH_CREDENTIALS);
         const auth = new google.auth.OAuth2(client_id, client_secret);
         auth.setCredentials({ refresh_token });
 
@@ -104,18 +287,14 @@ export class TransactionAutomationService {
       const newHistoryId = payload.historyId;
 
       // Load last known historyId from Firestore
-      const docRef = this.firestore
-        .collection(this.config.FIRESTORE_COLLECTION)
-        .doc(email);
+      const docRef = this.firestore.collection(this.config.FIRESTORE_COLLECTION).doc(email);
       const docSnap = await docRef.get();
-      const lastHistoryId = docSnap.exists
-        ? docSnap.data().lastHistoryId
-        : null;
+      const lastHistoryId = docSnap.exists ? docSnap.data().lastHistoryId : null;
 
       // Skip if this historyId is not newer than what we've already processed
-      if (lastHistoryId && newHistoryId <= lastHistoryId) {
+      if (lastHistoryId !== null && lastHistoryId !== undefined && BigInt(newHistoryId) <= BigInt(lastHistoryId)) {
         logger.log(
-          `⏭️ Skipping ${newHistoryId < lastHistoryId ? 'old' : 'duplicate'} historyId: ${newHistoryId} (last: ${lastHistoryId})`
+          `⏭️ Skipping ${BigInt(newHistoryId) < BigInt(lastHistoryId) ? 'old' : 'duplicate'} historyId: ${newHistoryId} (last: ${lastHistoryId})`
         );
         return;
       }
@@ -129,7 +308,6 @@ export class TransactionAutomationService {
         const success = await this.processGmailHistory(startId);
         if (!success) {
           logger.log('📬 Gmail History: No changes since last check');
-          return;
         }
 
         // Persist the latest historyId
@@ -137,22 +315,19 @@ export class TransactionAutomationService {
         logger.log(`✅ Updated Firestore lastHistoryId → ${newHistoryId}`);
       } catch (apiErr) {
         if (apiErr?.response?.status === 400) {
-          logger.warn(
-            `⚠️ Invalid historyId detected. Resetting baseline. Error: ${apiErr.message}`
-          );
+          logger.warn(`⚠️ Invalid historyId detected. Resetting baseline. Error: ${apiErr.message}`);
           try {
             const profile = await this.gmail.users.getProfile({ userId: 'me' });
             const resetHistoryId = profile.data.historyId;
-            await docRef.set(
-              { lastHistoryId: resetHistoryId },
-              { merge: true }
-            );
+            await docRef.set({ lastHistoryId: resetHistoryId }, { merge: true });
             logger.log(`✅ Baseline reset → ${resetHistoryId}`);
           } catch (resetErr) {
             logger.error(`❌ Failed to reset baseline: ${resetErr.message}`);
+            throw resetErr;
           }
         } else {
           logger.error(`❌ Gmail API error: ${apiErr.message}`);
+          throw apiErr;
         }
       }
     } catch (e) {
@@ -174,10 +349,7 @@ export class TransactionAutomationService {
     let totalMessages = 0;
 
     while (hasMore) {
-      const pageResults = await this.processHistoryPage(
-        startHistoryId,
-        pageToken
-      );
+      const pageResults = await this.processHistoryPage(startHistoryId, pageToken);
       const { processedCount, nextPageToken, historyFound } = pageResults;
 
       if (!historyFound) {
@@ -220,9 +392,7 @@ export class TransactionAutomationService {
       };
     }
 
-    logger.log(
-      `📬 Gmail History fetched: ${historyItems.length} items (Page token: ${pageToken || 'start'})`
-    );
+    logger.log(`📬 Gmail History fetched: ${historyItems.length} items (Page token: ${pageToken || 'start'})`);
 
     let processedCount = 0;
 
@@ -231,10 +401,7 @@ export class TransactionAutomationService {
         try {
           // Atomic deduplication: mark as processed BEFORE taking any action.
           // This prevents race conditions if multiple pub/sub notifications arrive at once.
-          const isNewMessage = await checkAndMarkMessageProcessed(
-            this.firestore,
-            message.id
-          );
+          const isNewMessage = await checkAndMarkMessageProcessed(this.firestore, message.id);
 
           if (!isNewMessage) {
             logger.log(`⏭️ Skipping already processed message: ${message.id}`);
@@ -245,12 +412,8 @@ export class TransactionAutomationService {
             userId: 'me',
             id: message.id,
           });
-          const subject =
-            msg.data.payload.headers.find((h) => h.name === 'Subject')?.value ||
-            '';
-          const from =
-            msg.data.payload.headers.find((h) => h.name === 'From')?.value ||
-            '';
+          const subject = msg.data.payload.headers.find((h) => h.name === 'Subject')?.value || '';
+          const from = msg.data.payload.headers.find((h) => h.name === 'From')?.value || '';
 
           const wasProcessed = await this.handleTransaction({
             from,
@@ -271,11 +434,14 @@ export class TransactionAutomationService {
             logger.warn(`👻 Skipping missing message: ${message.id}`);
             continue;
           }
-          logger.error(
-            `❌ Error processing message ${message.id}: ${e.message}`
-          );
-          // Retry processing this message on next iteration.
-          continue;
+          // Remove deduplication doc so this failed message can be retried on next attempt
+          try {
+            await this.firestore.collection('processed_messages').doc(message.id).delete();
+          } catch (delErr) {
+            logger.warn(`⚠️ Failed to clear deduplication lock for ${message.id}: ${delErr.message}`);
+          }
+          logger.error(`❌ Error processing message ${message.id}: ${e.message}`);
+          throw e;
         }
       }
     }
@@ -291,192 +457,20 @@ export class TransactionAutomationService {
    * Analyzes an email to detect and handle specific financial transactions.
    *
    * @param {Object} params
+   * @param {string} params.from
+   * @param {string} params.subject
+   * @param {Object} params.message
    * @returns {Promise<boolean>}
    */
   async handleTransaction({ from, subject, message }) {
-    const sender = from.toLowerCase();
-    const subj = subject.toLowerCase();
+    const subj = (subject || '').toLowerCase();
     const body = extractEmailBody(message).toLowerCase();
+    const context = { from, subject, subj, body, message };
 
-    // ✅ National Grid Bill
-    // Check subject AND body for original sender (handles forwards)
-    if (
-      (sender.includes('nationalgridus.com') ||
-        /from:.*nationalgridus\.com/.test(body)) &&
-      subj.includes('national grid bill')
-    ) {
-      logger.log(`⚡ Checking National Grid bill for "${subject}"`);
-      try {
-        if (!this.nationalGrid) {
-          const { default: NationalGridClient } =
-            await import('./NationalGridClient.js');
-          this.nationalGrid = new NationalGridClient();
-        }
-
-        const billData = await this.nationalGrid.getCurrentBill();
-        await this.uploadToDrive(billData, 'House/National Grid Bills');
-        return true;
-      } catch (e) {
-        logger.error(`❌ Failed to process National Grid bill: ${e.message}`);
-        return false;
+    for (const rule of this.rules) {
+      if (rule.matches(context)) {
+        return await rule.execute(context, this);
       }
-    }
-
-    // ✅ Sunrun Bill
-    // Check subject AND body for original sender (handles forwards)
-    if (
-      (sender.includes('sunrun.com') || /from:.*sunrun\.com/.test(body)) &&
-      subj.includes('sunrun bill')
-    ) {
-      logger.log(`☀️ Checking Sunrun bill for "${subject}"`);
-      try {
-        if (!this.sunrun) {
-          const { default: SunrunClient } = await import('./SunrunClient.js');
-          this.sunrun = new SunrunClient();
-        }
-
-        const billData = await this.sunrun.getBillFromMessage(
-          message,
-          this.gmail
-        );
-        if (!billData) {
-          return false;
-        }
-
-        await this.uploadToDrive(billData, 'House/Sunrun Bills');
-        return true;
-      } catch (e) {
-        logger.error(`❌ Failed to process Sunrun bill: ${e.message}`);
-        return false;
-      }
-    }
-
-    // ✅ Capital One withdrawal notice
-    if (
-      sender.includes('capitalone.com') &&
-      subj.includes('withdrawal notice')
-    ) {
-      logger.log(`🏦 Checking Capital One withdrawal notice for "${subject}"`);
-      const body = extractEmailBody(message).toLowerCase();
-
-      if (body.includes('att has initiated')) {
-        await this.processCalendarEvents('Pay AT&T', {
-          action: 'delete',
-          monthOffset: 0,
-        });
-        return true;
-      } else if (body.includes('lowes has initiated')) {
-        await this.processCalendarEvents('Pay Lowes', {
-          action: 'delete',
-          monthOffset: 0,
-        });
-        return true;
-      } else if (body.includes('eastern bank has initiated')) {
-        await this.processCalendarEvents('Pay Eastern Savings', {
-          action: 'delete',
-          monthOffset: 0,
-        });
-        return true;
-      } else if (body.includes('sunrun has initiated')) {
-        await this.processCalendarEvents('Sunrun withdrawal', {
-          action: 'delete',
-          monthOffset: 0,
-        });
-        return true;
-      } else if (body.includes('comcast-xfinity has initiated')) {
-        // ✅ Comcast/Xfinity
-        return await this.checkComcastPayment(body);
-      }
-      return false;
-    }
-
-    // ✅ Amex card payment
-    if (
-      sender.includes('americanexpress.com') &&
-      subj.includes('received your payment')
-    ) {
-      logger.log(`💳 Checking for Amex card payments for "${subject}"`);
-      await this.processCalendarEvents('Pay Amex', {
-        action: 'delete',
-        monthOffset: 1,
-      });
-      return true;
-    }
-
-    // ✅ Chase card payment
-    if (
-      sender.includes('chase.com') &&
-      subj.includes('your credit card payment is scheduled')
-    ) {
-      logger.log(`🔍 Checking for Chase card payments for "${subject}"`);
-      await this.processCalendarEvents('Pay Chase', {
-        action: 'delete',
-        monthOffset: 1,
-      });
-      return true;
-    }
-
-    // ✅ Chase mortgage payment
-    if (
-      sender.includes('chase.com') &&
-      subj.includes('you scheduled your mortgage payment')
-    ) {
-      logger.log(`🏠 Checking for Chase mortgage payments: "${subject}"`);
-      await this.processCalendarEvents('Pay mortgage', {
-        action: 'delete',
-        monthOffset: 1,
-      });
-      return true;
-    }
-
-    // ✅ Chase checking transfer alert
-    if (
-      sender.includes('chase.com') &&
-      subj.startsWith('you sent $') &&
-      subj.includes(' from account ending in')
-    ) {
-      logger.log(`🏦 Checking Chase transfer alert: "${subject}"`);
-
-      if (/\blowes\b/.test(body)) {
-        await this.processCalendarEvents('Pay Lowes', {
-          action: 'delete',
-          monthOffset: 0,
-        });
-        return true;
-      }
-      return false;
-    }
-
-    // ✅ Comcast/Xfinity
-    if (
-      sender.includes('chase.com') &&
-      subj.includes('transaction with comcast / xfinity')
-    ) {
-      return await this.checkComcastPayment(subject);
-    }
-
-    // ✅ Eversource
-    if (
-      sender.includes('chase.com') &&
-      subj.includes('transaction with spi*eversource')
-    ) {
-      logger.log(`🔌 Checking for Eversource/Speedpay payments: "${subject}"`);
-      const amountMatch = subject.match(/\$([\d,]+(?:\.\d{2})?)/);
-      if (!amountMatch) {
-        logger.log(`No dollar amount found in "${subject}"`);
-        return false;
-      }
-      const amount = parseFloat(amountMatch[1].replace(/,/g, ''));
-      if (isNaN(amount)) {
-        logger.log(`Invalid Eversource amount in "${subject}"`);
-        return false;
-      }
-      await this.processCalendarEvents('Pay Gas Bill', {
-        action: 'patch',
-        monthOffset: 0,
-        title: `Gas Bill - $${amount}`,
-      });
-      return true;
     }
 
     logger.log(`📖 Ignoring email from "${from}" and subject "${subject}"`);
@@ -501,11 +495,10 @@ export class TransactionAutomationService {
       logger.log(`Unexpected Comcast amount $${amount}, skipping.`);
       return false;
     }
-    await this.processCalendarEvents('Comcast / Xfinity Withdrawal', {
+    return await this.processCalendarEvents('Comcast / Xfinity Withdrawal', {
       action: 'delete',
       monthOffset: 0,
     });
-    return true;
   }
 
   /**
@@ -548,9 +541,7 @@ export class TransactionAutomationService {
           ...commonParams,
           fileId: fileId,
         });
-        logger.log(
-          `[ACTION] ☁️ Overwrote existing "${fileData.fileName}" in Drive (ID: ${file.data.id})`
-        );
+        logger.log(`[ACTION] ☁️ Overwrote existing "${fileData.fileName}" in Drive (ID: ${file.data.id})`);
       } else {
         // Create new file
         const file = await this.drive.files.create({
@@ -560,9 +551,7 @@ export class TransactionAutomationService {
             parents: [parentId],
           },
         });
-        logger.log(
-          `[ACTION] ☁️ Uploaded new "${fileData.fileName}" to Drive (ID: ${file.data.id})`
-        );
+        logger.log(`[ACTION] ☁️ Uploaded new "${fileData.fileName}" to Drive (ID: ${file.data.id})`);
       }
     } catch (e) {
       logger.error(`❌ Drive upload failed: ${e.message}`);
@@ -604,9 +593,7 @@ export class TransactionAutomationService {
       logger.log(`[ACTION] 📁 Created folder "${name}" (ID: ${file.data.id})`);
       return file.data.id;
     } catch (error) {
-      logger.error(
-        `❌ Error finding/creating folder "${name}": ${error.message}`
-      );
+      logger.error(`❌ Error finding/creating folder "${name}": ${error.message}`);
       throw error;
     }
   }
@@ -624,9 +611,7 @@ export class TransactionAutomationService {
         removeLabelIds: ['UNREAD'],
       },
     });
-    logger.log(
-      `[ACTION] 📖 Marked email "${from}" and subject "${subject}" as read.`
-    );
+    logger.log(`[ACTION] 📖 Marked email "${from}" and subject "${subject}" as read.`);
   }
 
   /**
@@ -637,25 +622,12 @@ export class TransactionAutomationService {
    */
   async processCalendarEvents(eventPrefix, { action, monthOffset = 0, title }) {
     const now = new Date();
-    const monthStart = new Date(
-      now.getFullYear(),
-      now.getMonth() + monthOffset,
-      1
-    );
-    const monthEnd = new Date(
-      now.getFullYear(),
-      now.getMonth() + monthOffset + 1,
-      0,
-      23,
-      59,
-      59
-    );
+    const monthStart = new Date(now.getFullYear(), now.getMonth() + monthOffset, 1);
+    const monthEnd = new Date(now.getFullYear(), now.getMonth() + monthOffset + 1, 0, 23, 59, 59);
 
     try {
       const calendarList = await this.calendar.calendarList.list();
-      const targetCal = calendarList.data.items.find(
-        (c) => c.summary === this.calendarName
-      );
+      const targetCal = calendarList.data.items.find((c) => c.summary === this.calendarName);
       if (!targetCal) {
         logger.log(`No calendar named "${this.calendarName}".`);
         return false;
@@ -668,9 +640,7 @@ export class TransactionAutomationService {
         singleEvents: true,
       });
 
-      const events = eventsRes.data.items.filter((e) =>
-        e.summary.startsWith(eventPrefix)
-      );
+      const events = eventsRes.data.items.filter((e) => e.summary.startsWith(eventPrefix));
       if (!events.length) {
         logger.log(`No "${eventPrefix}" reminders this month.`);
         return false;
@@ -679,9 +649,7 @@ export class TransactionAutomationService {
       for (const e of events) {
         if (action === 'delete') {
           const actualStart = e.originalStartTime || e.start;
-          const eventDate =
-            actualStart.date ||
-            new Date(actualStart.dateTime).toISOString().split('T')[0];
+          const eventDate = actualStart.date || new Date(actualStart.dateTime).toISOString().split('T')[0];
           logger.log(`[ACTION] 🗑 Deleting "${e.summary}" on ${eventDate}`);
           await this.calendar.events.delete({
             calendarId: targetCal.id,
@@ -704,6 +672,32 @@ export class TransactionAutomationService {
       return false;
     }
   }
+}
+
+/**
+ * Checks if the sender email address matches the specified domain or its subdomains.
+ *
+ * @param {string} from - The From header string (e.g., 'Chase <no.reply.alerts@chase.com>' or 'no-reply@chase.com').
+ * @param {string} domain - The domain to check against (e.g., 'chase.com').
+ * @returns {boolean} True if the sender email domain exactly matches or is a subdomain of the target domain.
+ */
+export function isFromDomain(from, domain) {
+  if (!from || typeof from !== 'string' || !domain || typeof domain !== 'string') {
+    return false;
+  }
+  const match = from.match(/<([^>]+)>/) || [null, from];
+  const email = (match[1] || '')
+    .replace(/["']/g, '')
+    .replace(/\s*\(.*?\)$/, '')
+    .trim()
+    .toLowerCase();
+  const atIndex = email.lastIndexOf('@');
+  if (atIndex === -1) {
+    return false;
+  }
+  const senderDomain = email.slice(atIndex + 1);
+  const targetDomain = domain.toLowerCase().replace(/^\.+/, '');
+  return senderDomain === targetDomain || senderDomain.endsWith(`.${targetDomain}`);
 }
 
 /**

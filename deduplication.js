@@ -14,7 +14,7 @@ export async function checkAndMarkMessageProcessed(firestore, messageId) {
       timestamp: Date.now(),
       // 7 days matches the max retention of Google Cloud Pub/Sub messages.
       // This ensures we never re-process a message even after a week-long outage.
-      ttl: Date.now() + 7 * 24 * 60 * 60 * 1000, // 7 days TTL
+      ttl: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000), // 7 days TTL (Date/Timestamp required by Firestore TTL)
     });
     return true;
   } catch (e) {

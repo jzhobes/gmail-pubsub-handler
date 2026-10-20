@@ -6,11 +6,7 @@ export class Logger {
   constructor() {
     // K_SERVICE is set by Cloud Run and Cloud Functions (2nd gen)
     // FUNCTION_TARGET or FUNCTION_NAME are often set in Cloud Functions
-    this.isDeployed = !!(
-      process.env.K_SERVICE ||
-      process.env.FUNCTION_TARGET ||
-      process.env.FUNCTION_NAME
-    );
+    this.isDeployed = !!(process.env.K_SERVICE || process.env.FUNCTION_TARGET || process.env.FUNCTION_NAME);
   }
 
   /**
@@ -27,8 +23,7 @@ export class Logger {
       console.log(
         JSON.stringify({
           severity,
-          message:
-            typeof message === 'string' ? message : JSON.stringify(message),
+          message: typeof message === 'string' ? message : JSON.stringify(message),
         })
       );
     } else {

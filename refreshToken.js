@@ -23,11 +23,7 @@ if (!GMAIL_OAUTH_CREDENTIALS) {
 
 const { client_id, client_secret } = JSON.parse(GMAIL_OAUTH_CREDENTIALS);
 
-const oauth2Client = new google.auth.OAuth2(
-  client_id,
-  client_secret,
-  'http://localhost'
-);
+const oauth2Client = new google.auth.OAuth2(client_id, client_secret, 'http://localhost');
 
 const url = oauth2Client.generateAuthUrl({
   access_type: 'offline',

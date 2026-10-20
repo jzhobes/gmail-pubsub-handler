@@ -46,17 +46,17 @@ Generate OAuth credentials using `refreshToken.js`:
 
 The system automatically processes these payment confirmation emails:
 
-| Provider                     | Email Pattern                                                       | Action                                                               |
-| ---------------------------- | ------------------------------------------------------------------- | -------------------------------------------------------------------- |
-| **National Grid**            | `nationalgridus.com` + "bill is ready"                              | Download PDF bill & upload to Drive                                  |
-| **Sunrun**                   | Subject "sunrun bill" + Sender/Body "sunrun"                        | Extract PDF attachment & upload to Drive                             |
-| **American Express**         | `americanexpress.com` + "received your payment"                     | Delete "Pay Amex" reminders                                          |
-| **Chase Credit Card**        | `chase.com` + "credit card payment is scheduled"                    | Delete "Pay Chase" reminders                                         |
-| **Chase Mortgage**           | `chase.com` + "you scheduled your mortgage payment"                 | Delete "Pay mortgage" reminders                                      |
-| **Lowe's Checking Transfer** | `chase.com` + "you sent $... from account ending in" + body "Lowes" | Delete "Pay Lowes" reminders                                         |
-| **Comcast/Xfinity**          | `chase.com` + "transaction with comcast / xfinity"                  | Delete "Comcast / Xfinity Withdrawal" reminders                      |
-| **Eversource**               | `chase.com` + "transaction with spi\*eversource"                    | Update "Pay Gas Bill" with amount                                    |
-| **Capital One Withdrawals**  | `capitalone.com` + "withdrawal notice"                              | Delete various bill reminders (AT&T, Lowes, Eastern Savings, Sunrun) |
+| Provider                     | Email Pattern                                                       | Action                                                                        |
+| ---------------------------- | ------------------------------------------------------------------- | ----------------------------------------------------------------------------- |
+| **National Grid**            | `nationalgridus.com` + "bill is ready"                              | Download PDF bill & upload to Drive                                           |
+| **Sunrun**                   | Subject "sunrun bill" + Sender/Body "sunrun"                        | Extract PDF attachment & upload to Drive                                      |
+| **American Express**         | `americanexpress.com` + "received your payment"                     | Delete "Pay Amex" reminders                                                   |
+| **Chase Credit Card**        | `chase.com` + "credit card payment is scheduled"                    | Delete "Pay Chase" reminders                                                  |
+| **Chase Mortgage**           | `chase.com` + "you scheduled your mortgage payment"                 | Delete "Pay mortgage" reminders                                               |
+| **Lowe's Checking Transfer** | `chase.com` + "you sent $... from account ending in" + body "Lowes" | Delete "Pay Lowes" reminders                                                  |
+| **Comcast/Xfinity**          | `chase.com` + "transaction with comcast / xfinity"                  | Delete "Comcast / Xfinity Withdrawal" reminders                               |
+| **Eversource**               | `chase.com` + "transaction with spi\*eversource"                    | Update "Pay Gas Bill" with amount                                             |
+| **Capital One Withdrawals**  | `capitalone.com` + "withdrawal notice"                              | Delete various bill reminders (AT&T, Lowes, Eastern Savings, Sunrun, Verizon) |
 
 Processed emails are automatically marked as read.
 

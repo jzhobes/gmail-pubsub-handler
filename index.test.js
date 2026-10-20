@@ -1,5 +1,5 @@
 import { jest } from '@jest/globals';
-import { TransactionAutomationService } from './index.js';
+import { TransactionAutomationService, isFromDomain, transactionRules } from './index.js';
 
 // Mock Google APIs (Calendar, Drive, Gmail)
 const mockCalendar = {
@@ -33,6 +33,7 @@ const mockFirestore = {
   get: jest.fn(),
   set: jest.fn(),
   create: jest.fn(),
+  delete: jest.fn(),
 };
 
 describe('Transaction Handler Logic', () => {
@@ -121,9 +122,7 @@ describe('Transaction Handler Logic', () => {
       });
 
       if (!searchResponse?.data?.messages?.length) {
-        throw new Error(
-          'No National Grid bill emails found in Gmail. Send yourself a test email first.'
-        );
+        throw new Error('No National Grid bill emails found in Gmail. Send yourself a test email first.');
       }
 
       const messageId = searchResponse.data.messages[0].id;
@@ -132,10 +131,8 @@ describe('Transaction Handler Logic', () => {
         id: messageId,
       });
 
-      const subject =
-        msg.data.payload.headers.find((h) => h.name === 'Subject')?.value || '';
-      const from =
-        msg.data.payload.headers.find((h) => h.name === 'From')?.value || '';
+      const subject = msg.data.payload.headers.find((h) => h.name === 'Subject')?.value || '';
+      const from = msg.data.payload.headers.find((h) => h.name === 'From')?.value || '';
 
       const result = await realService.handleTransaction({
         from,
@@ -178,9 +175,7 @@ describe('Transaction Handler Logic', () => {
           data: {
             id: 'msg_sunrun_123',
             payload: {
-              headers: [
-                { name: 'Date', value: 'Wed, 15 Nov 2023 10:00:00 -0500' },
-              ],
+              headers: [{ name: 'Date', value: 'Wed, 15 Nov 2023 10:00:00 -0500' }],
               parts: [
                 {
                   mimeType: 'application/pdf',
@@ -221,9 +216,7 @@ describe('Transaction Handler Logic', () => {
       });
 
       if (!searchResponse?.data?.messages?.length) {
-        throw new Error(
-          'No Sunrun bill emails found in Gmail. Send yourself a test email first.'
-        );
+        throw new Error('No Sunrun bill emails found in Gmail. Send yourself a test email first.');
       }
 
       const messageId = searchResponse.data.messages[0].id;
@@ -232,10 +225,8 @@ describe('Transaction Handler Logic', () => {
         id: messageId,
       });
 
-      const subject =
-        msg.data.payload.headers.find((h) => h.name === 'Subject')?.value || '';
-      const from =
-        msg.data.payload.headers.find((h) => h.name === 'From')?.value || '';
+      const subject = msg.data.payload.headers.find((h) => h.name === 'Subject')?.value || '';
+      const from = msg.data.payload.headers.find((h) => h.name === 'From')?.value || '';
 
       const result = await realService.handleTransaction({
         from,
@@ -252,9 +243,7 @@ describe('Transaction Handler Logic', () => {
       // Override the default empty list behavior for this specific test
       mockCalendar.events.list.mockResolvedValue({
         data: {
-          items: [
-            { id: 'evt_1', summary: 'Pay AT&T', start: { date: '2023-01-01' } },
-          ],
+          items: [{ id: 'evt_1', summary: 'Pay AT&T', start: { date: '2023-01-01' } }],
         },
       });
 
@@ -266,9 +255,7 @@ describe('Transaction Handler Logic', () => {
             payload: {
               mimeType: 'text/plain',
               body: {
-                data: Buffer.from('ATT has initiated a withdrawal').toString(
-                  'base64'
-                ),
+                data: Buffer.from('ATT has initiated a withdrawal').toString('base64'),
               },
             },
           },
@@ -284,6 +271,43 @@ describe('Transaction Handler Logic', () => {
       );
     });
 
+    it('deletes "Verizon withdrawal" event', async () => {
+      mockCalendar.events.list.mockResolvedValue({
+        data: {
+          items: [
+            {
+              id: 'evt_verizon',
+              summary: 'Verizon withdrawal',
+              start: { date: '2023-10-14' },
+            },
+          ],
+        },
+      });
+
+      const result = await service.handleTransaction({
+        from: 'capitalone@capitalone.com',
+        subject: 'Withdrawal Notice',
+        message: {
+          data: {
+            payload: {
+              mimeType: 'text/plain',
+              body: {
+                data: Buffer.from('Verizon has initiated a withdrawal of $64.99').toString('base64'),
+              },
+            },
+          },
+        },
+      });
+
+      expect(result).toBe(true);
+      expect(mockCalendar.events.delete).toHaveBeenCalledWith(
+        expect.objectContaining({
+          calendarId: 'cal_123',
+          eventId: 'evt_verizon',
+        })
+      );
+    });
+
     it('ignores unknown withdrawal', async () => {
       const result = await service.handleTransaction({
         from: 'capitalone@capitalone.com',
@@ -293,9 +317,7 @@ describe('Transaction Handler Logic', () => {
             payload: {
               mimeType: 'text/plain',
               body: {
-                data: Buffer.from('Unknown Merchant has initiated').toString(
-                  'base64'
-                ),
+                data: Buffer.from('Unknown Merchant has initiated').toString('base64'),
               },
             },
           },
@@ -328,9 +350,7 @@ describe('Transaction Handler Logic', () => {
             payload: {
               mimeType: 'text/plain',
               body: {
-                data: Buffer.from(
-                  'comcast-xfinity has initiated a withdrawal of $120.00'
-                ).toString('base64'),
+                data: Buffer.from('comcast-xfinity has initiated a withdrawal of $120.00').toString('base64'),
               },
             },
           },
@@ -406,9 +426,7 @@ describe('Transaction Handler Logic', () => {
             payload: {
               mimeType: 'text/html',
               body: {
-                data: Buffer.from(
-                  '<p>You sent $500.00 to <strong>LOWES</strong></p>'
-                ).toString('base64'),
+                data: Buffer.from('<p>You sent $500.00 to <strong>LOWES</strong></p>').toString('base64'),
               },
             },
           },
@@ -431,9 +449,7 @@ describe('Transaction Handler Logic', () => {
             payload: {
               mimeType: 'text/plain',
               body: {
-                data: Buffer.from('You sent $100.00 to SOMEONE').toString(
-                  'base64'
-                ),
+                data: Buffer.from('You sent $100.00 to SOMEONE').toString('base64'),
               },
             },
           },
@@ -575,6 +591,26 @@ describe('Transaction Handler Logic', () => {
       expect(result).toBe(false);
     });
 
+    it('ignores emails with spoofed display names', async () => {
+      const result = await service.handleTransaction({
+        from: '"Chase Alerts (chase.com)" <attacker@evil.com>',
+        subject: 'You scheduled your mortgage payment',
+        message: {},
+      });
+
+      expect(result).toBe(false);
+    });
+
+    it('ignores emails from lookalike or attacker domains', async () => {
+      const result = await service.handleTransaction({
+        from: 'alerts@fakechase.com',
+        subject: 'You scheduled your mortgage payment',
+        message: {},
+      });
+
+      expect(result).toBe(false);
+    });
+
     it('marks message as read', async () => {
       await service.markMessageAsRead({
         from: 'test@test.com',
@@ -588,6 +624,90 @@ describe('Transaction Handler Logic', () => {
           requestBody: { removeLabelIds: ['UNREAD'] },
         })
       );
+    });
+  });
+
+  describe('Modular Transaction Rules Engine', () => {
+    it('exports transactionRules with valid structure', () => {
+      expect(Array.isArray(transactionRules)).toBe(true);
+      expect(transactionRules.length).toBeGreaterThan(0);
+
+      for (const rule of transactionRules) {
+        expect(typeof rule.name).toBe('string');
+        expect(typeof rule.matches).toBe('function');
+        expect(typeof rule.execute).toBe('function');
+      }
+    });
+
+    it('defaults service.rules to transactionRules when not supplied', () => {
+      const defaultService = new TransactionAutomationService(
+        {
+          firestore: mockFirestore,
+          gmail: mockGmail,
+          calendar: mockCalendar,
+          drive: mockDrive,
+        },
+        { CALENDAR_NAME: 'Test Calendar' }
+      );
+      expect(defaultService.rules).toBe(transactionRules);
+    });
+
+    it('executes custom injected rules via services.rules', async () => {
+      const customRule = {
+        name: 'Custom Test Rule',
+        matches: jest.fn(({ subj }) => subj.includes('custom test')),
+        execute: jest.fn().mockResolvedValue(true),
+      };
+
+      const customService = new TransactionAutomationService(
+        {
+          firestore: mockFirestore,
+          gmail: mockGmail,
+          calendar: mockCalendar,
+          drive: mockDrive,
+          rules: [customRule],
+        },
+        { CALENDAR_NAME: 'Test Calendar' }
+      );
+
+      const result = await customService.handleTransaction({
+        from: 'test@custom.com',
+        subject: 'This is a custom test bill',
+        message: {},
+      });
+
+      expect(result).toBe(true);
+      expect(customRule.matches).toHaveBeenCalled();
+      expect(customRule.execute).toHaveBeenCalled();
+    });
+
+    it('falls through and returns false when injected rules do not match', async () => {
+      const customRule = {
+        name: 'Non Matching Rule',
+        matches: jest.fn().mockReturnValue(false),
+        execute: jest.fn().mockResolvedValue(true),
+      };
+
+      const customService = new TransactionAutomationService(
+        {
+          firestore: mockFirestore,
+          gmail: mockGmail,
+          calendar: mockCalendar,
+          drive: mockDrive,
+          rules: [customRule],
+        },
+        { CALENDAR_NAME: 'Test Calendar' }
+      );
+
+      const result = await customService.handleTransaction({
+        from: 'test@custom.com',
+        subject: 'Unmatched subject',
+        message: {},
+      });
+
+      expect(result).toBe(false);
+      expect(customRule.matches).toHaveBeenCalled();
+      expect(customRule.execute).not.toHaveBeenCalled();
     });
   });
 
@@ -690,6 +810,102 @@ describe('Transaction Handler Logic', () => {
         expect.objectContaining({ merge: true })
       );
     });
+
+    it('handles numeric string historyId comparisons correctly using BigInt', async () => {
+      const event = {
+        data: {
+          message: {
+            data: Buffer.from(
+              JSON.stringify({
+                emailAddress: 'me@example.com',
+                historyId: '1000',
+              })
+            ).toString('base64'),
+          },
+        },
+      };
+
+      // In lexicographical comparison, '1000' < '900'. But as BigInt, 1000 > 900.
+      mockFirestore.get.mockResolvedValueOnce({
+        exists: true,
+        data: () => ({ lastHistoryId: '900' }),
+      });
+      mockFirestore.create.mockResolvedValueOnce();
+
+      mockGmail.users.history.list.mockResolvedValue({
+        data: {
+          history: [],
+        },
+      });
+
+      await service.handleEvent(event);
+
+      // Verify it was NOT skipped as old/duplicate
+      expect(mockGmail.users.history.list).toHaveBeenCalled();
+      expect(mockFirestore.set).toHaveBeenCalledWith(
+        expect.objectContaining({ lastHistoryId: '1000' }),
+        expect.objectContaining({ merge: true })
+      );
+    });
+
+    it('rethrows non-400 Gmail API errors so Pub/Sub can retry', async () => {
+      const event = {
+        data: {
+          message: {
+            data: Buffer.from(
+              JSON.stringify({
+                emailAddress: 'me@example.com',
+                historyId: 1000,
+              })
+            ).toString('base64'),
+          },
+        },
+      };
+
+      mockFirestore.get.mockResolvedValueOnce({
+        exists: true,
+        data: () => ({ lastHistoryId: 900 }),
+      });
+
+      const serverError = new Error('Internal Server Error');
+      serverError.response = { status: 500 };
+      mockGmail.users.history.list.mockRejectedValue(serverError);
+
+      await expect(service.handleEvent(event)).rejects.toThrow('Internal Server Error');
+    });
+
+    it('does not advance lastHistoryId and throws if message processing fails', async () => {
+      const event = {
+        data: {
+          message: {
+            data: Buffer.from(
+              JSON.stringify({
+                emailAddress: 'me@example.com',
+                historyId: 1000,
+              })
+            ).toString('base64'),
+          },
+        },
+      };
+
+      mockFirestore.get.mockResolvedValueOnce({
+        exists: true,
+        data: () => ({ lastHistoryId: 900 }),
+      });
+      mockGmail.users.history.list.mockResolvedValue({
+        data: {
+          history: [{ messagesAdded: [{ message: { id: 'fail_msg_1' } }] }],
+        },
+      });
+      mockFirestore.create.mockResolvedValueOnce();
+      mockGmail.users.messages.get.mockRejectedValue(new Error('Drive upload network failure'));
+
+      await expect(service.handleEvent(event)).rejects.toThrow('Drive upload network failure');
+      expect(mockFirestore.set).not.toHaveBeenCalledWith(
+        expect.objectContaining({ lastHistoryId: 1000 }),
+        expect.anything()
+      );
+    });
   });
 
   describe('Drive file management', () => {
@@ -710,9 +926,7 @@ describe('Transaction Handler Logic', () => {
 
       await service.uploadToDrive(fileData, folderPath);
 
-      expect(mockDrive.files.update).toHaveBeenCalledWith(
-        expect.objectContaining({ fileId: 'file_789' })
-      );
+      expect(mockDrive.files.update).toHaveBeenCalledWith(expect.objectContaining({ fileId: 'file_789' }));
       expect(mockDrive.files.create).not.toHaveBeenCalled();
     });
   });
@@ -735,6 +949,21 @@ describe('Transaction Handler Logic', () => {
       // processHistoryPage should skip it and not crash
       const results = await service.processHistoryPage('900');
       expect(results.processedCount).toBe(0);
+    });
+
+    it('removes deduplication document and throws if message processing fails', async () => {
+      mockGmail.users.history.list.mockResolvedValue({
+        data: {
+          history: [{ messagesAdded: [{ message: { id: 'fail_msg_1' } }] }],
+        },
+      });
+      mockFirestore.create.mockResolvedValueOnce();
+      mockGmail.users.messages.get.mockRejectedValue(new Error('Network error'));
+
+      await expect(service.processHistoryPage('900')).rejects.toThrow('Network error');
+      expect(mockFirestore.collection).toHaveBeenCalledWith('processed_messages');
+      expect(mockFirestore.doc).toHaveBeenCalledWith('fail_msg_1');
+      expect(mockFirestore.delete).toHaveBeenCalled();
     });
 
     it('extracts body from multipart email', async () => {
@@ -768,12 +997,9 @@ describe('Transaction Handler Logic', () => {
     it('handles Drive upload failure', async () => {
       mockDrive.files.list.mockRejectedValue(new Error('Drive error'));
 
-      await expect(
-        service.uploadToDrive(
-          { buffer: Buffer.from(''), fileName: 't.pdf' },
-          'H/B'
-        )
-      ).rejects.toThrow('Drive error');
+      await expect(service.uploadToDrive({ buffer: Buffer.from(''), fileName: 't.pdf' }, 'H/B')).rejects.toThrow(
+        'Drive error'
+      );
     });
 
     it('handles Calendar API error gracefully', async () => {
@@ -817,16 +1043,55 @@ describe('Transaction Handler Logic', () => {
       // First folder 'House' not found
       mockDrive.files.list.mockResolvedValueOnce({ data: { files: [] } });
       // Create folder 'House' fails
-      mockDrive.files.create.mockRejectedValue(
-        new Error('Folder create error')
-      );
+      mockDrive.files.create.mockRejectedValue(new Error('Folder create error'));
 
-      await expect(
-        service.uploadToDrive(
-          { buffer: Buffer.from(''), fileName: 't.pdf' },
-          'House/B'
-        )
-      ).rejects.toThrow('Folder create error');
+      await expect(service.uploadToDrive({ buffer: Buffer.from(''), fileName: 't.pdf' }, 'House/B')).rejects.toThrow(
+        'Folder create error'
+      );
+    });
+  });
+
+  describe('isFromDomain', () => {
+    it('matches exact domain', () => {
+      expect(isFromDomain('user@chase.com', 'chase.com')).toBe(true);
+    });
+
+    it('matches subdomains', () => {
+      expect(isFromDomain('alerts@mail.chase.com', 'chase.com')).toBe(true);
+      expect(isFromDomain('alerts@a.b.chase.com', 'chase.com')).toBe(true);
+    });
+
+    it('matches addresses with display names', () => {
+      expect(isFromDomain('Chase <no-reply@chase.com>', 'chase.com')).toBe(true);
+      expect(isFromDomain('"Chase Alerts" <alerts@mail.chase.com>', 'chase.com')).toBe(true);
+      expect(isFromDomain('<customerservice@nationalgridus.com>', 'nationalgridus.com')).toBe(true);
+    });
+
+    it('handles case insensitivity', () => {
+      expect(isFromDomain('AmericanExpress@welcome.americanexpress.com', 'americanexpress.com')).toBe(true);
+      expect(isFromDomain('USER@CHASE.COM', 'chase.com')).toBe(true);
+      expect(isFromDomain('user@chase.com', 'CHASE.COM')).toBe(true);
+    });
+
+    it('rejects lookalike domains and attacker prefixes/suffixes', () => {
+      expect(isFromDomain('attacker@fakechase.com', 'chase.com')).toBe(false);
+      expect(isFromDomain('attacker@not-chase.com', 'chase.com')).toBe(false);
+      expect(isFromDomain('attacker@chase.com.attacker.com', 'chase.com')).toBe(false);
+      expect(isFromDomain('attacker@chase.community', 'chase.com')).toBe(false);
+    });
+
+    it('rejects display name injection when address is untrusted', () => {
+      expect(isFromDomain('"chase.com support" <attacker@evil.com>', 'chase.com')).toBe(false);
+      expect(isFromDomain('Chase <chase.com> <attacker@evil.com>', 'chase.com')).toBe(false);
+    });
+
+    it('rejects invalid or malformed inputs', () => {
+      expect(isFromDomain('', 'chase.com')).toBe(false);
+      expect(isFromDomain(null, 'chase.com')).toBe(false);
+      expect(isFromDomain(undefined, 'chase.com')).toBe(false);
+      expect(isFromDomain('not-an-email', 'chase.com')).toBe(false);
+      expect(isFromDomain('user@chase.com', '')).toBe(false);
+      expect(isFromDomain('user@chase.com', null)).toBe(false);
     });
   });
 });

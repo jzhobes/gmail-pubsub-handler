@@ -27,15 +27,10 @@ describe('Deduplication Logic', () => {
     it('returns true for new message (success)', async () => {
       mockDoc.create.mockResolvedValue({ writeTime: Date.now() });
 
-      const result = await checkAndMarkMessageProcessed(
-        mockFirestore,
-        'msg_123'
-      );
+      const result = await checkAndMarkMessageProcessed(mockFirestore, 'msg_123');
 
       expect(result).toBe(true);
-      expect(mockFirestore.collection).toHaveBeenCalledWith(
-        'processed_messages'
-      );
+      expect(mockFirestore.collection).toHaveBeenCalledWith('processed_messages');
       expect(mockCollection.doc).toHaveBeenCalledWith('msg_123');
       expect(mockDoc.create).toHaveBeenCalled();
     });
@@ -45,10 +40,7 @@ describe('Deduplication Logic', () => {
       e.code = 6; // ALREADY_EXISTS code
       mockDoc.create.mockRejectedValue(e);
 
-      const result = await checkAndMarkMessageProcessed(
-        mockFirestore,
-        'msg_123'
-      );
+      const result = await checkAndMarkMessageProcessed(mockFirestore, 'msg_123');
 
       expect(result).toBe(false);
     });
@@ -57,9 +49,7 @@ describe('Deduplication Logic', () => {
       const e = new Error('Connection failed');
       mockDoc.create.mockRejectedValue(e);
 
-      await expect(
-        checkAndMarkMessageProcessed(mockFirestore, 'msg_123')
-      ).rejects.toThrow('Connection failed');
+      await expect(checkAndMarkMessageProcessed(mockFirestore, 'msg_123')).rejects.toThrow('Connection failed');
     });
   });
 });

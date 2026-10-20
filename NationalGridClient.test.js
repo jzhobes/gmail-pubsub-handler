@@ -1,7 +1,9 @@
 import fs from 'fs';
 import NationalGridClient from './NationalGridClient.js';
 
-describe('NationalGridClient', () => {
+const describeIntegration = process.env.RUN_INTEGRATION_TESTS === 'true' ? describe : describe.skip;
+
+describeIntegration('NationalGridClient', () => {
   let client;
   const createdFiles = [];
 
@@ -43,9 +45,7 @@ describe('NationalGridClient', () => {
       expect(bill).toBeDefined();
       expect(bill.buffer).toBeDefined();
       expect(bill.fileName).toBeDefined();
-      console.log(
-        `✅ getCurrentBill() returned file ${bill.fileName} (${bill.buffer.length} bytes)`
-      );
+      console.log(`✅ getCurrentBill() returned file ${bill.fileName} (${bill.buffer.length} bytes)`);
     });
   });
 

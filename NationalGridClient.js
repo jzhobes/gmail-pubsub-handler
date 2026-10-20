@@ -12,8 +12,7 @@ const USER_AGENT =
   'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36';
 const ORIGIN = 'https://login.nationalgrid.com';
 
-const BASE_URL =
-  'https://login.nationalgrid.com/login.nationalgridus.com/b2c_1a_nationalgrid_convert_merge_signin';
+const BASE_URL = 'https://login.nationalgrid.com/login.nationalgridus.com/b2c_1a_nationalgrid_convert_merge_signin';
 const AUTHORIZE_URL = `${BASE_URL}/oauth2/v2.0/authorize`;
 const TOKEN_URL = `${BASE_URL}/oauth2/v2.0/token`;
 const SELF_ASSERTED_URL = `${BASE_URL}/SelfAsserted`;
@@ -22,11 +21,7 @@ const POLICY = 'B2C_1A_NationalGrid_convert_merge_signin';
 
 // PKCE Helper Functions
 function base64URLEncode(str) {
-  return str
-    .toString('base64')
-    .replace(/\+/g, '-')
-    .replace(/\//g, '_')
-    .replace(/=/g, '');
+  return str.toString('base64').replace(/\+/g, '-').replace(/\//g, '_').replace(/=/g, '');
 }
 
 function sha256(buffer) {
@@ -129,18 +124,10 @@ export default class NationalGridClient {
       this.accountNumber = creds.accountNumber;
       this.subscriptionKey = creds.subscriptionKey;
     } catch (e) {
-      throw new Error(
-        `❌ Failed to parse NATIONAL_GRID_CREDENTIALS: ${e.message}`,
-        { cause: e }
-      );
+      throw new Error(`❌ Failed to parse NATIONAL_GRID_CREDENTIALS: ${e.message}`, { cause: e });
     }
 
-    if (
-      !this.signInName ||
-      !this.password ||
-      !this.accountNumber ||
-      !this.subscriptionKey
-    ) {
+    if (!this.signInName || !this.password || !this.accountNumber || !this.subscriptionKey) {
       throw new Error(
         '❌ Invalid credentials JSON. Expected "signInName", "password", "accountNumber", and "subscriptionKey".'
       );
@@ -163,7 +150,9 @@ export default class NationalGridClient {
     const clientRequestId = crypto.randomUUID();
     const state = base64URLEncode(crypto.randomBytes(32));
 
-    console.log(`🔑 Generated PKCE Verifier: ${codeVerifier}`);
+    console.log(
+      `🔑 Generated PKCE Verifier (${codeVerifier.length} chars, preview: ${codeVerifier.substring(0, 4)}...)`
+    );
 
     // 1. Initial GET request to establish session
     const initialParams = new URLSearchParams({
@@ -190,9 +179,7 @@ export default class NationalGridClient {
     });
 
     if (!getResponse.ok) {
-      throw new Error(
-        `❌ Initial GET failed: ${getResponse.status} ${getResponse.statusText}`
-      );
+      throw new Error(`❌ Initial GET failed: ${getResponse.status} ${getResponse.statusText}`);
     }
 
     // Extract Cookies
@@ -204,9 +191,7 @@ export default class NationalGridClient {
     // Extract CSRF Token
     const csrfToken = this.cookieJar.get('x-ms-cpim-csrf');
     if (!csrfToken) {
-      throw new Error(
-        '❌ Could not find x-ms-cpim-csrf cookie for CSRF token.'
-      );
+      throw new Error('❌ Could not find x-ms-cpim-csrf cookie for CSRF token.');
     }
 
     // Extract Transaction ID (TID)
@@ -281,9 +266,7 @@ export default class NationalGridClient {
     const newTid = newJson.C_ID;
 
     if (!newTid) {
-      throw new Error(
-        '❌ Could not extract TID from new x-ms-cpim-trans cookie'
-      );
+      throw new Error('❌ Could not extract TID from new x-ms-cpim-trans cookie');
     }
 
     const newTxData = { TID: newTid };
@@ -309,33 +292,41 @@ export default class NationalGridClient {
     if (confirmedResponse.status === 302 || confirmedResponse.status === 301) {
       redirectUrl = confirmedResponse.headers.get('location');
     } else {
-      throw new Error(
-        `❌ Confirmed endpoint did not redirect (Status: ${confirmedResponse.status}).`
-      );
+      throw new Error(`❌ Confirmed endpoint did not redirect (Status: ${confirmedResponse.status}).`);
     }
 
     if (!redirectUrl) {
       throw new Error('❌ No Location header found');
     }
 
-    console.log(`🔗 Redirect URL: ${redirectUrl}`);
+    const redirectObj = new URL(redirectUrl);
+    const hashParams = redirectObj.hash ? new URLSearchParams(redirectObj.hash.substring(1)) : null;
+    const searchKeys = [...redirectObj.searchParams.keys()];
+    const hashKeys = hashParams ? [...hashParams.keys()] : [];
+
+    console.log(
+      `🔗 Redirect endpoint: ${redirectObj.origin}${redirectObj.pathname} (params: [${searchKeys.join(', ')}], hash: [${hashKeys.join(', ')}])`
+    );
+
+    // Extract any OAuth errors returned by the identity provider
+    const oauthError = redirectObj.searchParams.get('error') || hashParams?.get('error');
+    const oauthDesc = redirectObj.searchParams.get('error_description') || hashParams?.get('error_description');
+    if (oauthError) {
+      console.error(`❌ National Grid OAuth error: ${oauthError}${oauthDesc ? ` - ${oauthDesc}` : ''}`);
+    }
 
     // Extract Code
-    const redirectObj = new URL(redirectUrl);
-    let code;
-    if (redirectObj.hash) {
-      const hashParams = new URLSearchParams(redirectObj.hash.substring(1));
-      code = hashParams.get('code');
-    }
-    if (!code) {
-      code = redirectObj.searchParams.get('code');
-    }
+    const code = hashParams?.get('code') || redirectObj.searchParams.get('code');
 
     if (!code) {
-      throw new Error('❌ Authorization Code not found in redirect URL');
+      throw new Error(
+        `❌ Authorization Code not found in redirect URL${oauthError ? ` (OAuth Error: ${oauthError} - ${oauthDesc || ''})` : ''}`
+      );
     }
 
-    console.log(`🎟️ Authorization Code: ${code}`);
+    console.log(
+      `🎟️ Authorization Code received (${code.length} chars, preview: ${code.substring(0, 4)}...${code.slice(-4)})`
+    );
 
     // 4. Exchange Code for Token
     console.log('🔄 Exchanging code for token...');
@@ -435,9 +426,7 @@ export default class NationalGridClient {
     console.log(`✅ Bill History Response Status: ${gqlResponse.status}`);
 
     if (!gqlResponse.ok) {
-      throw new Error(
-        `❌ ⚠️ Failed to fetch bill history: ${gqlResponse.status}`
-      );
+      throw new Error(`❌ ⚠️ Failed to fetch bill history: ${gqlResponse.status}`);
     }
 
     const historyData = await gqlResponse.json();
@@ -493,9 +482,7 @@ export default class NationalGridClient {
       console.log('❌ Bill PDF Error Body:', errText.substring(0, 500));
 
       if (billResponse.status === 401 || billResponse.status === 403) {
-        console.error(
-          '\n🚫 AUTHENTICATION ERROR: The Subscription Key may have expired or changed.'
-        );
+        console.error('\n🚫 AUTHENTICATION ERROR: The Subscription Key may have expired or changed.');
         console.error(
           `👉 Please check the "Ocp-Apim-Subscription-Key" header in your browser's network tab for ${MY_ACCOUNT_URL} and update the subscriptionKey in NATIONAL_GRID_CREDENTIALS.\n`
         );
@@ -515,9 +502,7 @@ export default class NationalGridClient {
     const { buffer, fileName } = await this.getCurrentBill();
     const filePath = path.join(process.cwd(), fileName);
     fs.writeFileSync(filePath, buffer);
-    console.log(
-      `💾 SUCCESS: Bill PDF saved to ${filePath} (${buffer.byteLength} bytes)`
-    );
+    console.log(`💾 SUCCESS: Bill PDF saved to ${filePath} (${buffer.byteLength} bytes)`);
     return filePath;
   }
 }
